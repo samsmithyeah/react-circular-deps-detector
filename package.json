@@ -1,0 +1,45 @@
+{
+  "name": "react-circular-deps-detector",
+  "version": "1.0.0",
+  "description": "CLI tool to detect circular dependencies in React hooks dependency arrays",
+  "main": "dist/cli.js",
+  "bin": {
+    "react-circular-deps": "./dist/cli.js",
+    "rcd": "./dist/cli.js"
+  },
+  "preferGlobal": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["react", "circular-dependencies", "hooks", "useEffect", "useCallback", "useMemo", "linter", "cli"],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/react-circular-deps-detector.git"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "devDependencies": {
+    "@babel/parser": "^7.27.5",
+    "@babel/traverse": "^7.27.4",
+    "@babel/types": "^7.27.6",
+    "@types/babel__traverse": "^7.20.7",
+    "@types/node": "^24.0.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^14.0.0",
+    "glob": "^11.0.3"
+  }
+}
