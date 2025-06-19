@@ -14,12 +14,21 @@
     "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["react", "circular-dependencies", "hooks", "useEffect", "useCallback", "useMemo", "linter", "cli"],
+  "keywords": [
+    "react",
+    "circular-dependencies",
+    "hooks",
+    "useEffect",
+    "useCallback",
+    "useMemo",
+    "linter",
+    "cli"
+  ],
   "author": "",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/react-circular-deps-detector.git"
+    "url": "https://github.com/samsmithyeah/react-circular-deps-detector.git"
   },
   "engines": {
     "node": ">=14.0.0"
