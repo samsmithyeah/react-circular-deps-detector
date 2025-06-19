@@ -1,6 +1,18 @@
 # React Circular Dependencies Detector
 
-A CLI tool to detect circular dependencies in React hooks' dependency arrays. This tool helps identify potential infinite re-render loops caused by circular references in `useEffect`, `useCallback`, `useMemo`, and other React hooks.
+A comprehensive CLI tool to detect circular dependencies and infinite re-render risks in React applications. This tool analyzes both import cycles between files and React hooks dependency arrays to identify potential infinite re-render loops that can crash your app or cause performance issues.
+
+## ✨ Features
+
+- 🔍 **Import Cycle Detection**: Finds circular imports between files
+- 🎣 **React Hooks Analysis**: Detects infinite re-render risks in useEffect, useCallback, useMemo
+- 🚨 **Severity Levels**: High severity for guaranteed infinite loops, medium for potential issues  
+- 💡 **Actionable Solutions**: Clear fix suggestions for every issue found
+- 📍 **Precise Location**: Exact file and line number for each problem
+- 🎨 **Beautiful Output**: Clean, readable formatting with color coding
+- 📊 **JSON Output**: Machine-readable format for CI/CD integration
+- ⚡ **Fast Analysis**: Efficiently processes large codebases
+- 🎯 **Zero Config**: Works out of the box with sensible defaults
 
 ## Installation
 
@@ -59,29 +71,131 @@ If installed locally, add to your `package.json`:
 
 ## What It Detects
 
-The tool analyzes React hooks and identifies circular dependencies like:
+### 🔄 Import Circular Dependencies
+Detects circular imports between files that can cause module loading issues:
+```typescript
+// file1.ts
+import { utilityB } from './file2';
+export const utilityA = () => utilityB();
 
-```javascript
-// Example 1: Circular dependency between callbacks
+// file2.ts  
+import { utilityA } from './file1'; // 🔴 Circular import
+export const utilityB = () => utilityA();
+```
+
+### 🎣 React Hooks Dependency Issues
+Identifies infinite re-render risks in React hooks:
+
+```typescript
+// 🚨 HIGH SEVERITY: State setter dependency
+const [isLoading, setIsLoading] = useState(false);
+
+const problematicFunction = useCallback(async () => {
+  setIsLoading(true);
+  await fetchData();
+  setIsLoading(false);
+}, [isLoading]); // 🔴 Depends on isLoading but modifies it - infinite loop!
+
+// ✅ FIXED: Remove the dependency or use functional update
+const fixedFunction = useCallback(async () => {
+  setIsLoading(true);
+  await fetchData();
+  setIsLoading(false);
+}, []); // No dependencies needed
+
+// ⚠️ MEDIUM SEVERITY: Potential unnecessary dependency
 const [data, setData] = useState(null);
 
-const fetchData = useCallback(() => {
-  processData();
-}, [data, processData]); // 🔴 Circular: fetchData → processData → fetchData
-
-const processData = useCallback(() => {
-  setData(fetchData());
-}, [fetchData]);
-
-// Example 2: Self-referential dependency
-const memoizedValue = useMemo(() => {
-  return computeValue(memoizedValue); // 🔴 Self-reference
-}, [memoizedValue]);
-
-// Example 3: Multiple hook circular dependency
 useEffect(() => {
-  handleChange();
-}, [value, handleChange]); // 🔴 If handleChange depends on value
+  if (data) {
+    console.log('Data updated:', data); // Only reads data, doesn't modify
+  }
+}, [data]); // ⚠️ Conservative warning - this is usually fine
+```
+
+## Common Issues Fixed
+
+### 🔥 Infinite Re-render Loops
+The most dangerous pattern that causes apps to freeze:
+```typescript
+// 🔴 BROKEN: Infinite loop
+const [count, setCount] = useState(0);
+const increment = useCallback(() => {
+  setCount(count + 1);
+}, [count]); // count changes → increment recreated → count changes → ...
+
+// ✅ FIXED: Stable dependency
+const increment = useCallback(() => {
+  setCount(prev => prev + 1);
+}, []); // No dependencies = stable function
+```
+
+### 🔄 Function Recreation Chains  
+Functions that depend on each other causing unnecessary re-renders:
+```typescript
+// 🔴 BROKEN: Functions recreate each other
+const functionA = useCallback(() => {
+  functionB();
+}, [functionB]);
+
+const functionB = useCallback(() => {
+  functionA();
+}, [functionA]); // Circular dependency
+
+// ✅ FIXED: Break the chain
+const functionA = useCallback(() => {
+  // Direct implementation
+}, []);
+
+const functionB = useCallback(() => {
+  functionA(); // functionA is now stable
+}, []);
+```
+
+## Real-world Example
+
+This tool was created to solve a real issue where enabling React's `exhaustive-deps` ESLint rule caused infinite loops:
+
+```typescript
+// Before: This worked but had missing dependencies
+const updateLocationMode = useCallback(async () => {
+  setIsLoading(true);
+  await api.updateLocation();
+  setIsLoading(false);
+}, []); // ❌ ESLint: missing dependency 'isLoading'
+
+// After ESLint fix: Infinite loop! 
+const updateLocationMode = useCallback(async () => {
+  setIsLoading(true);   // Modifies isLoading
+  await api.updateLocation();
+  setIsLoading(false);
+}, [isLoading]); // 🔴 Now depends on isLoading - INFINITE LOOP!
+
+// Terminal output: 
+// LOG [UpdateLocationTrackingMode] Shared locations: 0, Required mode: passive, Currently active: true
+// LOG [UpdateLocationTrackingMode] Shared locations: 0, Required mode: passive, Currently active: true
+// LOG [UpdateLocationTrackingMode] Shared locations: 0, Required mode: passive, Currently active: true
+// (repeats forever...)
+```
+
+**Our tool detects this and suggests the fix:**
+```
+🚨 Infinite re-render risk (high severity)
+
+📍 Location: SignalContext.tsx:45
+🎣 Hook: useCallback (function: updateLocationMode)  
+⚠️  Problem: Depends on 'isLoading' but may modify it
+💡 Solution: Remove 'isLoading' from dependencies or use stable references
+```
+
+**The correct fix:**
+```typescript
+// ✅ FIXED: No dependency needed since we use functional updates
+const updateLocationMode = useCallback(async () => {
+  setIsLoading(true);   // Direct call, no dependency needed
+  await api.updateLocation();
+  setIsLoading(false);
+}, []); // Empty deps - stable function
 ```
 
 ## Options
@@ -116,20 +230,49 @@ The following patterns are ignored by default:
 Analyzing React hooks in: /path/to/project
 Pattern: **/*.{js,jsx,ts,tsx}
 
-✗ Found 2 circular dependencies:
+✓ No import circular dependencies found
+✓ No cross-file import cycles found
 
-1. src/components/UserProfile.tsx:45
-   Hook: useCallback
-   Cycle: updateUser → userData → fetchUser
+❌ Found 2 React hooks dependency issues:
 
-2. src/hooks/useDataSync.ts:78
-   Hook: useEffect
-   Cycle: syncData → localData → syncData
+1. 🚨  Infinite re-render risk (high severity)
+
+    📍 Location:
+       src/components/UserProfile.tsx:45
+
+    🎣 Hook:
+       useCallback (function: updateUser)
+
+    ⚠️  Problem:
+       Depends on 'userData' but may modify it
+       userData → setUserData
+
+    💡 Solution:
+       Remove 'userData' from dependencies or use stable references
+
+
+2. ⚠️  Infinite re-render risk (medium severity)
+
+    📍 Location:
+       src/hooks/useDataSync.ts:78
+
+    🎣 Hook:
+       useEffect
+
+    ⚠️  Problem:
+       Depends on 'data' but may modify it
+       data → setData
+
+    💡 Solution:
+       Review if 'data' dependency is necessary
+
 
 Summary:
-  Files analyzed: 23
-  Hooks analyzed: 67
-  Circular dependencies: 2
+Files analyzed: 23
+Hooks analyzed: 67
+Issues found: 2
+  Import cycles: 0
+  Hooks issues: 2
 ```
 
 ## Integration with CI/CD
@@ -145,6 +288,31 @@ if [ $? -eq 1 ]; then
   echo "Circular dependencies detected!"
   exit 1
 fi
+```
+
+## Development
+
+### Running Tests
+
+```bash
+# Run tests
+npm test
+
+# Run tests with coverage
+npm run test:coverage
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+### Building
+
+```bash
+# Build the project
+npm run build
+
+# Build in watch mode
+npm run dev
 ```
 
 ## License
