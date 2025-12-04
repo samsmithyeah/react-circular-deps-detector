@@ -33,6 +33,8 @@ export interface ParsedFile {
   exports: ExportInfo[];
   functions: Set<string>;
   contexts: Set<string>;
+  ast: t.File;  // Store the parsed AST to avoid re-parsing
+  content: string;  // Store file content for comment analysis
 }
 
 const REACT_HOOKS = [
@@ -44,8 +46,8 @@ const REACT_HOOKS = [
 ];
 
 export function parseFile(filePath: string): ParsedFile {
-  const code = fs.readFileSync(filePath, 'utf-8');
-  const ast = parser.parse(code, {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const ast = parser.parse(content, {
     sourceType: 'module',
     plugins: ['jsx', 'typescript'],
   });
@@ -122,7 +124,7 @@ export function parseFile(filePath: string): ParsedFile {
     },
   });
 
-  return { file: filePath, hooks, variables, imports, exports, functions, contexts };
+  return { file: filePath, hooks, variables, imports, exports, functions, contexts, ast, content };
 }
 
 function extractHookInfo(

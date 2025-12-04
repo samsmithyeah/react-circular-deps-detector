@@ -46,16 +46,10 @@ export function detectImprovedHooksLoops(parsedFiles: ParsedFile[]): HooksLoop[]
 
 function analyzeFileForImprovedHooksLoops(file: ParsedFile): HooksLoop[] {
   const loops: HooksLoop[] = [];
-  
+
   try {
-    const fs = require('fs');
-    const babel = require('@babel/parser');
-    
-    const content = fs.readFileSync(file.file, 'utf-8');
-    const ast = babel.parse(content, {
-      sourceType: 'module',
-      plugins: ['typescript', 'jsx'],
-    });
+    // Use the cached AST from ParsedFile instead of re-parsing
+    const ast = file.ast;
 
     // Extract comprehensive hook information
     const { hookDefinitions, stateSetters } = extractDetailedHookInfo(ast);

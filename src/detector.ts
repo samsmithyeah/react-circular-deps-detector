@@ -6,6 +6,7 @@ import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from 
 import { HooksDependencyAnalyzer, HooksDependencyLoop } from './hooks-dependency-analyzer';
 import { detectSimpleHooksLoops, SimpleHookLoop } from './simple-hooks-analyzer';
 import { detectImprovedHooksLoops, HooksLoop } from './improved-hooks-analyzer';
+import { analyzeHooksIntelligently, IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
 
 export interface CircularDependency {
   file: string;
@@ -20,6 +21,7 @@ export interface DetectionResults {
   hooksDependencyLoops: HooksDependencyLoop[];
   simpleHooksLoops: SimpleHookLoop[];
   improvedHooksLoops: HooksLoop[];
+  intelligentHooksAnalysis: IntelligentHookAnalysis[];
   summary: {
     filesAnalyzed: number;
     hooksAnalyzed: number;
@@ -28,6 +30,7 @@ export interface DetectionResults {
     hooksDependencyLoops: number;
     simpleHooksLoops: number;
     improvedHooksLoops: number;
+    intelligentAnalysisCount: number;
   };
 }
 
@@ -79,6 +82,9 @@ export async function detectCircularDependencies(
   // Run improved hooks loop detection
   const improvedHooksLoops = detectImprovedHooksLoops(parsedFiles);
   
+  // Run intelligent hooks analysis
+  const intelligentHooksAnalysis = analyzeHooksIntelligently(parsedFiles);
+  
   const totalHooks = parsedFiles.reduce((sum, file) => sum + file.hooks.length, 0);
   
   return {
@@ -87,6 +93,7 @@ export async function detectCircularDependencies(
     hooksDependencyLoops: hooksAnalysis.dependencyLoops,
     simpleHooksLoops: simpleHooksLoops,
     improvedHooksLoops: improvedHooksLoops,
+    intelligentHooksAnalysis: intelligentHooksAnalysis,
     summary: {
       filesAnalyzed: parsedFiles.length,
       hooksAnalyzed: totalHooks,
@@ -95,6 +102,7 @@ export async function detectCircularDependencies(
       hooksDependencyLoops: hooksAnalysis.dependencyLoops.length,
       simpleHooksLoops: simpleHooksLoops.length,
       improvedHooksLoops: improvedHooksLoops.length,
+      intelligentAnalysisCount: intelligentHooksAnalysis.length,
     },
   };
 }
@@ -132,11 +140,30 @@ function isLikelyReactFile(filePath: string): boolean {
 
 async function findFiles(targetPath: string, options: DetectorOptions): Promise<string[]> {
   const pattern = path.join(targetPath, options.pattern);
+
+  // Build ignore function for glob v11+
+  // Glob v11 uses a different ignore syntax - we need to use a function-based approach
+  const ignorePatterns = options.ignore || [];
+
   const files = await glob(pattern, {
-    ignore: options.ignore,
+    ignore: {
+      ignored: (p: any) => {
+        const fullPath = p.fullpath ? p.fullpath() : p;
+        // Check if path matches any ignore pattern
+        return ignorePatterns.some(pattern => {
+          // Convert glob pattern to regex-like check
+          // Handle common patterns like **/node_modules/**
+          const patternRegex = pattern
+            .replace(/\*\*/g, '.*')
+            .replace(/\*/g, '[^/]*')
+            .replace(/\//g, '\\/');
+          return new RegExp(patternRegex).test(fullPath);
+        });
+      }
+    },
     absolute: true,
   });
-  
+
   // Filter out directories and files that are definitely not React files
   return files.filter(file => {
     try {
