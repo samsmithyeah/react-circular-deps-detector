@@ -203,6 +203,377 @@ function resolveImportPath(fromFile: string, importPath: string): string | null 
   return null;
 }
 
+/**
+ * Detect setState calls during render phase (outside hooks, event handlers, callbacks).
+ * This is a guaranteed infinite loop pattern.
+ *
+ * Pattern detected:
+ * ```
+ * function Component() {
+ *   const [count, setCount] = useState(0);
+ *   setCount(count + 1); // BUG: runs during render!
+ *   return <div>{count}</div>;
+ * }
+ * ```
+ */
+function detectSetStateDuringRender(
+  ast: t.Node,
+  stateInfo: Map<string, string>,
+  filePath: string,
+  fileContent?: string
+): IntelligentHookAnalysis[] {
+  const results: IntelligentHookAnalysis[] = [];
+  const setterNames = new Set(stateInfo.values());
+
+  // Build reverse map: setter -> state variable
+  const setterToState = new Map<string, string>();
+  stateInfo.forEach((setter, state) => setterToState.set(setter, state));
+
+  traverse(ast, {
+    // Look for function declarations that look like React components (PascalCase)
+    FunctionDeclaration(funcPath: NodePath<t.FunctionDeclaration>) {
+      const funcName = funcPath.node.id?.name;
+      if (!funcName || !/^[A-Z]/.test(funcName)) return; // Not a component
+
+      checkComponentBodyForSetState(
+        funcPath,
+        setterNames,
+        setterToState,
+        filePath,
+        fileContent,
+        results
+      );
+    },
+
+    // Arrow function components: const MyComponent = () => { ... }
+    VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
+      if (!t.isIdentifier(varPath.node.id)) return;
+      const varName = varPath.node.id.name;
+      if (!/^[A-Z]/.test(varName)) return; // Not a component
+
+      const init = varPath.node.init;
+      if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+
+      // Get the path to the arrow/function expression
+      const funcPath = varPath.get('init') as NodePath<
+        t.ArrowFunctionExpression | t.FunctionExpression
+      >;
+      checkComponentBodyForSetState(
+        funcPath,
+        setterNames,
+        setterToState,
+        filePath,
+        fileContent,
+        results
+      );
+    },
+  });
+
+  return results;
+}
+
+/**
+ * Check a component's function body for setState calls that happen during render.
+ */
+function checkComponentBodyForSetState(
+  funcPath: NodePath<t.FunctionDeclaration | t.ArrowFunctionExpression | t.FunctionExpression>,
+  setterNames: Set<string>,
+  setterToState: Map<string, string>,
+  filePath: string,
+  fileContent: string | undefined,
+  results: IntelligentHookAnalysis[]
+): void {
+  const body = funcPath.node.body;
+  if (!t.isBlockStatement(body)) return; // Arrow function with expression body
+
+  // Find all setState calls in the component body that are NOT inside:
+  // - useEffect, useCallback, useMemo, useLayoutEffect callbacks
+  // - event handlers (arrow functions or function expressions assigned to variables)
+  // - nested functions
+
+  funcPath.traverse({
+    CallExpression(callPath: NodePath<t.CallExpression>) {
+      if (!t.isIdentifier(callPath.node.callee)) return;
+      const calleeName = callPath.node.callee.name;
+
+      if (!setterNames.has(calleeName)) return;
+
+      // Check if this call is inside a safe context (hook callback, event handler, nested function)
+      if (isInsideSafeContext(callPath)) return;
+
+      const line = callPath.node.loc?.start.line || 0;
+
+      // Check for ignore comments
+      if (fileContent && isHookIgnored(fileContent, line)) return;
+
+      const stateVar = setterToState.get(calleeName) || calleeName;
+
+      results.push(
+        createAnalysis({
+          type: 'confirmed-infinite-loop',
+          severity: 'high',
+          confidence: 'high',
+          hookType: 'render',
+          line,
+          file: filePath,
+          problematicDependency: stateVar,
+          stateVariable: stateVar,
+          setterFunction: calleeName,
+          actualStateModifications: [calleeName],
+          stateReads: [],
+          explanation:
+            `'${calleeName}()' is called directly during render (in the component body). ` +
+            `This causes an infinite loop because each setState triggers a re-render, which calls setState again. ` +
+            `Fix: move the setState call into a useEffect, event handler, or callback.`,
+        })
+      );
+    },
+  });
+}
+
+/**
+ * Check if a CallExpression is inside a safe context where setState won't cause render loops.
+ * Safe contexts include:
+ * - Inside useEffect, useCallback, useMemo, useLayoutEffect callbacks
+ * - Inside arrow functions or function expressions (event handlers, callbacks)
+ * - Inside nested function declarations (but NOT the component function itself)
+ */
+function isInsideSafeContext(callPath: NodePath<t.CallExpression>): boolean {
+  let current: NodePath | null = callPath.parentPath;
+
+  while (current) {
+    const node = current.node;
+
+    // Check if we're inside a function (arrow or regular)
+    if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) {
+      // If we're inside an arrow/function expression, it's a safe context
+      // (event handler, callback, hook callback, etc.)
+      // BUT we need to check if this is the component itself (arrow function component)
+      const parent = current.parentPath;
+      if (
+        parent &&
+        t.isVariableDeclarator(parent.node) &&
+        t.isIdentifier(parent.node.id) &&
+        /^[A-Z]/.test(parent.node.id.name)
+      ) {
+        // This is the component function itself (arrow function component)
+        // e.g., const MyComponent = () => { ... }
+        return false;
+      }
+
+      // Otherwise it's a nested function - safe context
+      return true;
+    }
+
+    // Check if we're inside a regular function declaration
+    if (t.isFunctionDeclaration(node)) {
+      // Check if this is the component function itself
+      const funcName = node.id?.name;
+      if (funcName && /^[A-Z]/.test(funcName)) {
+        // This is the component function itself - NOT safe
+        // We've reached the boundary
+        return false;
+      }
+
+      // It's a nested function - safe context
+      return true;
+    }
+
+    current = current.parentPath;
+  }
+
+  return false;
+}
+
+/**
+ * Detect useEffect calls without a dependency array that contain setState.
+ * This is a guaranteed infinite loop pattern.
+ *
+ * Pattern detected:
+ * ```
+ * useEffect(() => {
+ *   setCount(c => c + 1);
+ * }); // Missing dependency array!
+ * ```
+ *
+ * Also detects indirect patterns:
+ * ```
+ * const fetchData = () => { setData(x); };
+ * useEffect(() => {
+ *   fetchData(); // calls function that eventually calls setState
+ * });
+ * ```
+ */
+function detectUseEffectWithoutDeps(
+  ast: t.Node,
+  stateInfo: Map<string, string>,
+  filePath: string,
+  fileContent?: string
+): IntelligentHookAnalysis[] {
+  const results: IntelligentHookAnalysis[] = [];
+  const setterNames = new Set(stateInfo.values());
+
+  // Build reverse map: setter -> state variable
+  const setterToState = new Map<string, string>();
+  stateInfo.forEach((setter, state) => setterToState.set(setter, state));
+
+  // First pass: find local functions that call state setters (directly or indirectly)
+  const functionsCallingSetters = new Map<string, string[]>(); // function name -> setters it calls
+
+  traverse(ast, {
+    // Track arrow function assignments: const fetchData = () => { setData(...) }
+    VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
+      if (!t.isIdentifier(varPath.node.id)) return;
+      const funcName = varPath.node.id.name;
+      const init = varPath.node.init;
+
+      if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+
+      // Check if this function calls any setters (directly or passes them as callbacks)
+      const settersCalled: string[] = [];
+      const funcPath = varPath.get('init') as NodePath<
+        t.ArrowFunctionExpression | t.FunctionExpression
+      >;
+      funcPath.traverse({
+        CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+          // Check for direct calls: setData(x)
+          if (t.isIdentifier(innerCallPath.node.callee)) {
+            const calleeName = innerCallPath.node.callee.name;
+            if (setterNames.has(calleeName)) {
+              settersCalled.push(calleeName);
+            }
+          }
+
+          // Check for setters passed as arguments: .then(setData)
+          for (const arg of innerCallPath.node.arguments || []) {
+            if (t.isIdentifier(arg) && setterNames.has(arg.name)) {
+              settersCalled.push(arg.name);
+            }
+          }
+        },
+      });
+
+      if (settersCalled.length > 0) {
+        functionsCallingSetters.set(funcName, settersCalled);
+      }
+    },
+
+    // Track function declarations: function fetchData() { setData(...) }
+    FunctionDeclaration(funcPath: NodePath<t.FunctionDeclaration>) {
+      const funcName = funcPath.node.id?.name;
+      if (!funcName) return;
+
+      // Skip component functions (PascalCase)
+      if (/^[A-Z]/.test(funcName)) return;
+
+      const settersCalled: string[] = [];
+      funcPath.traverse({
+        CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+          // Check for direct calls: setData(x)
+          if (t.isIdentifier(innerCallPath.node.callee)) {
+            const calleeName = innerCallPath.node.callee.name;
+            if (setterNames.has(calleeName)) {
+              settersCalled.push(calleeName);
+            }
+          }
+
+          // Check for setters passed as arguments: .then(setData)
+          for (const arg of innerCallPath.node.arguments || []) {
+            if (t.isIdentifier(arg) && setterNames.has(arg.name)) {
+              settersCalled.push(arg.name);
+            }
+          }
+        },
+      });
+
+      if (settersCalled.length > 0) {
+        functionsCallingSetters.set(funcName, settersCalled);
+      }
+    },
+  });
+
+  // Second pass: find useEffect without deps
+  traverse(ast, {
+    CallExpression(callPath: NodePath<t.CallExpression>) {
+      if (!t.isIdentifier(callPath.node.callee)) return;
+      const hookName = callPath.node.callee.name;
+
+      // Only check useEffect and useLayoutEffect
+      if (hookName !== 'useEffect' && hookName !== 'useLayoutEffect') return;
+
+      const args = callPath.node.arguments;
+
+      // Check if there's no dependency array (only 1 argument - the callback)
+      if (args.length !== 1) return;
+
+      const callback = args[0];
+      if (!t.isArrowFunctionExpression(callback) && !t.isFunctionExpression(callback)) return;
+
+      const line = callPath.node.loc?.start.line || 0;
+
+      // Check for ignore comments
+      if (fileContent && isHookIgnored(fileContent, line)) return;
+
+      // Check if the callback contains any setState calls (direct or indirect)
+      const setterCallsInCallback: string[] = [];
+      const functionCallsInCallback: string[] = [];
+
+      const callbackPath = callPath.get('arguments.0') as NodePath<
+        t.ArrowFunctionExpression | t.FunctionExpression
+      >;
+      callbackPath.traverse({
+        CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+          if (!t.isIdentifier(innerCallPath.node.callee)) return;
+          const calleeName = innerCallPath.node.callee.name;
+
+          // Direct setter call
+          if (setterNames.has(calleeName)) {
+            setterCallsInCallback.push(calleeName);
+          }
+
+          // Function call that might lead to setter
+          if (functionsCallingSetters.has(calleeName)) {
+            functionCallsInCallback.push(calleeName);
+            const indirectSetters = functionsCallingSetters.get(calleeName) || [];
+            setterCallsInCallback.push(...indirectSetters);
+          }
+        },
+      });
+
+      if (setterCallsInCallback.length > 0) {
+        const firstSetter = setterCallsInCallback[0];
+        const stateVar = setterToState.get(firstSetter) || firstSetter;
+        const isIndirect = functionCallsInCallback.length > 0;
+
+        results.push(
+          createAnalysis({
+            type: 'confirmed-infinite-loop',
+            severity: 'high',
+            confidence: isIndirect ? 'medium' : 'high',
+            hookType: hookName,
+            line,
+            file: filePath,
+            problematicDependency: 'missing-deps',
+            stateVariable: stateVar,
+            setterFunction: firstSetter,
+            actualStateModifications: setterCallsInCallback,
+            stateReads: [],
+            explanation: isIndirect
+              ? `${hookName} has no dependency array, so it runs after every render. ` +
+                `It calls '${functionCallsInCallback[0]}()' which calls '${firstSetter}()', triggering re-renders. ` +
+                `Fix: add a dependency array (e.g., [] for run-once, or [dep1, dep2] for specific dependencies).`
+              : `${hookName} has no dependency array, so it runs after every render. ` +
+                `It calls '${firstSetter}()' which triggers a re-render, causing an infinite loop. ` +
+                `Fix: add a dependency array (e.g., [] for run-once, or [dep1, dep2] for specific dependencies).`,
+          })
+        );
+      }
+    },
+  });
+
+  return results;
+}
+
 export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): IntelligentHookAnalysis[] {
   const results: IntelligentHookAnalysis[] = [];
 
@@ -241,6 +612,14 @@ function analyzeFileIntelligently(
 
     // Extract unstable local variables (objects, arrays, functions created in component body)
     const unstableVars = extractUnstableVariables(ast);
+
+    // Check for setState during render (outside hooks/event handlers)
+    const renderStateIssues = detectSetStateDuringRender(ast, stateInfo, file.file, file.content);
+    results.push(...renderStateIssues);
+
+    // Check for useEffect without dependency array
+    const noDepsIssues = detectUseEffectWithoutDeps(ast, stateInfo, file.file, file.content);
+    results.push(...noDepsIssues);
 
     // Analyze each hook
     const hookNodes = findHookNodes(ast);
@@ -372,6 +751,102 @@ const STABLE_FUNCTION_CALLS = new Set([
 ]);
 
 /**
+ * Method calls that return primitive values (string, number, boolean).
+ * Primitives are compared by value, not reference, so they're stable.
+ */
+const PRIMITIVE_RETURNING_METHODS = new Set([
+  // String methods
+  'join',
+  'toString',
+  'toLocaleString',
+  'valueOf',
+  'charAt',
+  'charCodeAt',
+  'codePointAt',
+  'substring',
+  'substr',
+  'slice',
+  'trim',
+  'trimStart',
+  'trimEnd',
+  'toLowerCase',
+  'toUpperCase',
+  'toLocaleLowerCase',
+  'toLocaleUpperCase',
+  'normalize',
+  'padStart',
+  'padEnd',
+  'repeat',
+  'replace',
+  'replaceAll',
+  // Number methods
+  'toFixed',
+  'toExponential',
+  'toPrecision',
+  // Array methods that return primitives
+  'indexOf',
+  'lastIndexOf',
+  'length', // Not a method but included for member expressions
+  // Boolean checks
+  'includes',
+  'startsWith',
+  'endsWith',
+  'every',
+  'some',
+  // Reduce can return primitives (commonly does)
+  // Note: We'll be conservative here - reduce CAN return objects
+]);
+
+/**
+ * Static methods on built-in objects that return primitives.
+ */
+const PRIMITIVE_RETURNING_STATIC_METHODS: Record<string, Set<string>> = {
+  Math: new Set([
+    'abs',
+    'acos',
+    'acosh',
+    'asin',
+    'asinh',
+    'atan',
+    'atan2',
+    'atanh',
+    'cbrt',
+    'ceil',
+    'clz32',
+    'cos',
+    'cosh',
+    'exp',
+    'expm1',
+    'floor',
+    'fround',
+    'hypot',
+    'imul',
+    'log',
+    'log10',
+    'log1p',
+    'log2',
+    'max',
+    'min',
+    'pow',
+    'random',
+    'round',
+    'sign',
+    'sin',
+    'sinh',
+    'sqrt',
+    'tan',
+    'tanh',
+    'trunc',
+  ]),
+  Number: new Set(['isFinite', 'isInteger', 'isNaN', 'isSafeInteger', 'parseFloat', 'parseInt']),
+  String: new Set(['fromCharCode', 'fromCodePoint']),
+  Object: new Set(['is', 'hasOwn']),
+  Array: new Set(['isArray']),
+  Date: new Set(['now', 'parse', 'UTC']),
+  JSON: new Set(['stringify']), // Returns string
+};
+
+/**
  * React hooks that are guaranteed to return stable values/references.
  * Note: useState and useReducer return tuples where the setter/dispatch is stable,
  * but we handle those via destructuring patterns separately.
@@ -397,6 +872,43 @@ function isStableFunctionCall(init: t.CallExpression): boolean {
   // Known stable function calls
   if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
     return true;
+  }
+
+  // Custom hooks (use* prefix) are treated as stable by default
+  // Rationale: Most custom hooks in real apps either:
+  // 1. Return values from state management (Zustand, Redux, etc.) - stable references
+  // 2. Return primitives - stable by value
+  // 3. Memoize their return values internally
+  // Treating them as unstable causes too many false positives in practice.
+  // If a custom hook genuinely returns new objects, users can still catch it
+  // through other patterns (e.g., the hook's internal implementation).
+  if (t.isIdentifier(callee) && callee.name.startsWith('use')) {
+    return true;
+  }
+
+  // Check for method calls that return primitives (e.g., array.join(), string.slice())
+  if (t.isMemberExpression(callee) && t.isIdentifier(callee.property)) {
+    const methodName = callee.property.name;
+
+    // Methods that return primitives (strings, numbers, booleans)
+    if (PRIMITIVE_RETURNING_METHODS.has(methodName)) {
+      return true;
+    }
+
+    // Check for static methods on built-in objects (e.g., Math.round(), Date.now())
+    if (t.isIdentifier(callee.object)) {
+      const objectName = callee.object.name;
+      const staticMethods = PRIMITIVE_RETURNING_STATIC_METHODS[objectName];
+      if (staticMethods?.has(methodName)) {
+        return true;
+      }
+    }
+
+    // Zustand/store pattern: store.getState() returns stable references
+    // Pattern: useXxxStore.getState() or xxxStore.getState()
+    if (methodName === 'getState') {
+      return true;
+    }
   }
 
   return false;
@@ -594,6 +1106,21 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           return;
         }
 
+        // Track object destructuring from any custom hook (use* prefix)
+        // Custom hooks typically return stable values from state management (Zustand, Redux, etc.)
+        // or memoized values. Treating them as unstable causes many false positives.
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name.startsWith('use')
+        ) {
+          // Mark all destructured values from custom hooks as stable
+          for (const name of extractIdentifiersFromPattern(id)) {
+            stateVars.add(name);
+          }
+          return;
+        }
+
         // Skip stable function calls (React hooks, parseInt, etc.)
         if (t.isCallExpression(init) && isStableFunctionCall(init)) {
           return;
@@ -631,13 +1158,22 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
       }
 
       // Check if this is a useMemo/useCallback call - memoized values are stable
-      if (
-        t.isCallExpression(init) &&
-        t.isIdentifier(init.callee) &&
-        (init.callee.name === 'useMemo' || init.callee.name === 'useCallback')
-      ) {
-        memoizedVars.add(varName);
-        return;
+      // Handles both `useCallback(...)` and `React.useCallback(...)`
+      if (t.isCallExpression(init)) {
+        const callee = init.callee;
+        const isMemoHook =
+          // Direct call: useCallback(...) or useMemo(...)
+          (t.isIdentifier(callee) &&
+            (callee.name === 'useMemo' || callee.name === 'useCallback')) ||
+          // Namespaced call: React.useCallback(...) or React.useMemo(...)
+          (t.isMemberExpression(callee) &&
+            t.isIdentifier(callee.property) &&
+            (callee.property.name === 'useMemo' || callee.property.name === 'useCallback'));
+
+        if (isMemoHook) {
+          memoizedVars.add(varName);
+          return;
+        }
       }
 
       // Track module-level variables (before any component function)
@@ -778,6 +1314,243 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
  * Check if a hook has unstable references in its dependency array.
  * Returns an analysis if an issue is found, null otherwise.
  */
+/**
+ * Check if a useEffect/useLayoutEffect body contains unconditional setState calls.
+ * Returns true if there's a setState that will ALWAYS run (not guarded by if/early return).
+ *
+ * Uses a simple recursive walk instead of traverse() to avoid scope issues
+ * when analyzing extracted function nodes.
+ */
+function hasUnconditionalSetState(effectBody: t.Node, stateInfo: Map<string, string>): boolean {
+  const setterNames = new Set(stateInfo.values());
+  let hasUnconditional = false;
+
+  // Get the actual function body (handle arrow functions and regular functions)
+  let bodyToAnalyze: t.Node | null = null;
+  if (t.isArrowFunctionExpression(effectBody)) {
+    bodyToAnalyze = effectBody.body;
+  } else if (t.isFunctionExpression(effectBody)) {
+    bodyToAnalyze = effectBody.body;
+  } else {
+    bodyToAnalyze = effectBody;
+  }
+
+  if (!bodyToAnalyze) return false;
+
+  /**
+   * Recursively walk the AST looking for unconditional setState calls.
+   * @param node - Current AST node
+   * @param conditionalDepth - How many levels of conditional context we're in
+   */
+  function walk(node: t.Node | null | undefined, conditionalDepth: number): void {
+    if (!node || hasUnconditional) return;
+
+    // Check for setState calls at this level
+    if (t.isCallExpression(node)) {
+      const callee = node.callee;
+      if (t.isIdentifier(callee) && setterNames.has(callee.name)) {
+        // This is a setState call - check if it's unconditional
+        if (conditionalDepth === 0) {
+          hasUnconditional = true;
+          return;
+        }
+      }
+
+      // Check for async patterns - increment depth for their callbacks
+      const isAsyncCallback =
+        (t.isIdentifier(callee) &&
+          ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name)) ||
+        (t.isMemberExpression(callee) &&
+          t.isIdentifier(callee.property) &&
+          ['then', 'catch', 'finally'].includes(callee.property.name));
+
+      if (isAsyncCallback) {
+        // Walk arguments with increased depth (callbacks inside are deferred)
+        for (const arg of node.arguments) {
+          if (t.isExpression(arg) || t.isSpreadElement(arg)) {
+            walk(arg, conditionalDepth + 1);
+          }
+        }
+        // Walk the callee too (for chained .then().catch())
+        walk(callee, conditionalDepth);
+        return;
+      }
+
+      // Regular call - walk callee and arguments
+      walk(callee, conditionalDepth);
+      for (const arg of node.arguments) {
+        if (t.isExpression(arg) || t.isSpreadElement(arg)) {
+          walk(arg, conditionalDepth);
+        }
+      }
+      return;
+    }
+
+    // Don't traverse into nested function definitions (they're not executed immediately)
+    if (
+      t.isArrowFunctionExpression(node) ||
+      t.isFunctionExpression(node) ||
+      t.isFunctionDeclaration(node)
+    ) {
+      return;
+    }
+
+    // Conditional contexts - increase depth
+    if (t.isIfStatement(node)) {
+      walk(node.test, conditionalDepth);
+      walk(node.consequent, conditionalDepth + 1);
+      walk(node.alternate, conditionalDepth + 1);
+      return;
+    }
+
+    if (t.isConditionalExpression(node)) {
+      walk(node.test, conditionalDepth);
+      walk(node.consequent, conditionalDepth + 1);
+      walk(node.alternate, conditionalDepth + 1);
+      return;
+    }
+
+    if (t.isLogicalExpression(node)) {
+      walk(node.left, conditionalDepth);
+      // Right side of && or || is conditional
+      walk(node.right, conditionalDepth + 1);
+      return;
+    }
+
+    // Block statement - walk all statements
+    if (t.isBlockStatement(node)) {
+      for (const stmt of node.body) {
+        walk(stmt, conditionalDepth);
+      }
+      return;
+    }
+
+    // Expression statement - walk the expression
+    if (t.isExpressionStatement(node)) {
+      walk(node.expression, conditionalDepth);
+      return;
+    }
+
+    // Return statement - walk the argument
+    if (t.isReturnStatement(node)) {
+      walk(node.argument, conditionalDepth);
+      return;
+    }
+
+    // Variable declaration - walk initializers
+    if (t.isVariableDeclaration(node)) {
+      for (const decl of node.declarations) {
+        walk(decl.init, conditionalDepth);
+      }
+      return;
+    }
+
+    // Try-catch - walk all parts
+    if (t.isTryStatement(node)) {
+      walk(node.block, conditionalDepth);
+      walk(node.handler?.body, conditionalDepth + 1);
+      walk(node.finalizer, conditionalDepth);
+      return;
+    }
+
+    // For/while loops - walk body with conditional depth (may not execute)
+    if (t.isForStatement(node) || t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
+      if (t.isForStatement(node)) {
+        walk(node.init, conditionalDepth);
+        walk(node.test, conditionalDepth);
+        walk(node.update, conditionalDepth);
+      }
+      if (t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
+        walk(node.test, conditionalDepth);
+      }
+      walk(node.body, conditionalDepth + 1);
+      return;
+    }
+
+    // For-in/for-of loops
+    if (t.isForInStatement(node) || t.isForOfStatement(node)) {
+      walk(node.right, conditionalDepth);
+      walk(node.body, conditionalDepth + 1);
+      return;
+    }
+
+    // Switch statement
+    if (t.isSwitchStatement(node)) {
+      walk(node.discriminant, conditionalDepth);
+      for (const caseClause of node.cases) {
+        walk(caseClause.test, conditionalDepth);
+        for (const stmt of caseClause.consequent) {
+          walk(stmt, conditionalDepth + 1);
+        }
+      }
+      return;
+    }
+
+    // Member expression - walk object and property
+    if (t.isMemberExpression(node)) {
+      walk(node.object, conditionalDepth);
+      if (node.computed) {
+        walk(node.property, conditionalDepth);
+      }
+      return;
+    }
+
+    // Array/object expressions - walk elements
+    if (t.isArrayExpression(node)) {
+      for (const el of node.elements) {
+        walk(el, conditionalDepth);
+      }
+      return;
+    }
+
+    if (t.isObjectExpression(node)) {
+      for (const prop of node.properties) {
+        if (t.isObjectProperty(prop)) {
+          walk(prop.value, conditionalDepth);
+        }
+      }
+      return;
+    }
+
+    // Binary/unary expressions
+    if (t.isBinaryExpression(node) || t.isAssignmentExpression(node)) {
+      walk(node.left, conditionalDepth);
+      walk(node.right, conditionalDepth);
+      return;
+    }
+
+    if (t.isUnaryExpression(node) || t.isUpdateExpression(node)) {
+      walk(node.argument, conditionalDepth);
+      return;
+    }
+
+    // Sequence expression
+    if (t.isSequenceExpression(node)) {
+      for (const expr of node.expressions) {
+        walk(expr, conditionalDepth);
+      }
+      return;
+    }
+
+    // Await expression
+    if (t.isAwaitExpression(node)) {
+      walk(node.argument, conditionalDepth);
+      return;
+    }
+
+    // Template literal
+    if (t.isTemplateLiteral(node)) {
+      for (const expr of node.expressions) {
+        walk(expr, conditionalDepth);
+      }
+      return;
+    }
+  }
+
+  walk(bodyToAnalyze, 0);
+  return hasUnconditional;
+}
+
 function checkUnstableReferences(
   hookNode: HookNodeInfo,
   unstableVars: Map<string, UnstableVariable>,
@@ -796,11 +1569,19 @@ function checkUnstableReferences(
     return null; // No dependencies array
   }
 
+  // Get the effect/callback body (first argument)
+  const effectBody = node.arguments[0];
+
   // Get dependencies array
   const depsArray = node.arguments[node.arguments.length - 1];
   if (!t.isArrayExpression(depsArray)) {
     return null;
   }
+
+  // For useEffect/useLayoutEffect, check if there are unconditional setState calls
+  const isUseEffect = hookName === 'useEffect' || hookName === 'useLayoutEffect';
+  const hasUnconditionalStateUpdate =
+    isUseEffect && effectBody && hasUnconditionalSetState(effectBody, stateInfo);
 
   // Check each dependency
   for (const dep of depsArray.elements) {
@@ -814,7 +1595,6 @@ function checkUnstableReferences(
     // Check if this dependency is an unstable variable
     const unstableVar = unstableVars.get(depName);
     if (unstableVar) {
-      const isUseEffect = hookName === 'useEffect' || hookName === 'useLayoutEffect';
       const typeDescriptions: Record<string, string> = {
         object: 'object literal',
         array: 'array literal',
@@ -822,9 +1602,15 @@ function checkUnstableReferences(
         'function-call': 'function call result',
       };
 
+      // Determine severity based on whether there's an unconditional setState
+      // - If useEffect with unconditional setState: confirmed infinite loop (high severity)
+      // - If useEffect with only conditional setState: potential issue (medium severity) - effect runs often but won't loop
+      // - If useCallback/useMemo: potential issue (medium severity) - unnecessary re-creation
+      const isConfirmedLoop = isUseEffect && hasUnconditionalStateUpdate;
+
       return createAnalysis({
-        type: isUseEffect ? 'confirmed-infinite-loop' : 'potential-issue',
-        severity: isUseEffect ? 'high' : 'medium',
+        type: isConfirmedLoop ? 'confirmed-infinite-loop' : 'potential-issue',
+        severity: isConfirmedLoop ? 'high' : 'medium',
         confidence: 'high',
         hookType: hookName,
         line,
@@ -834,13 +1620,19 @@ function checkUnstableReferences(
         setterFunction: undefined,
         actualStateModifications: [],
         stateReads: [],
-        explanation: isUseEffect
+        explanation: isConfirmedLoop
           ? `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
-            `It gets a new reference on every render, causing this ${hookName} to run infinitely. ` +
+            `It gets a new reference on every render, and this ${hookName} has an unconditional setState, ` +
+            `causing an infinite re-render loop. ` +
             `Fix: wrap with useMemo/useCallback, move outside the component, or remove from dependencies.`
-          : `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
-            `It gets a new reference on every render, causing unnecessary ${hookName} re-creation. ` +
-            `Fix: wrap with useMemo/useCallback or move outside the component.`,
+          : isUseEffect
+            ? `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
+              `It gets a new reference on every render, causing this ${hookName} to run on every render. ` +
+              `This is a performance issue but won't cause an infinite loop since setState calls are conditional. ` +
+              `Fix: wrap with useMemo/useCallback, move outside the component, or remove from dependencies.`
+            : `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
+              `It gets a new reference on every render, causing unnecessary ${hookName} re-creation. ` +
+              `Fix: wrap with useMemo/useCallback or move outside the component.`,
       });
     }
   }
