@@ -1,5 +1,7 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import { ParsedFile, ImportInfo, ExportInfo } from './parser';
+import { createPathResolver, PathResolver } from './path-resolver';
 
 export interface ModuleDependency {
   from: string;
@@ -20,10 +22,18 @@ export interface ModuleGraph {
   crossFileCycles: CrossFileCycle[];
 }
 
-export function buildModuleGraph(parsedFiles: ParsedFile[]): ModuleGraph {
+export function buildModuleGraph(parsedFiles: ParsedFile[], projectRoot?: string): ModuleGraph {
   const dependencies = new Map<string, ModuleDependency[]>();
   const exports = new Map<string, ExportInfo[]>();
-  
+
+  // Determine project root from files if not provided
+  const effectiveProjectRoot = projectRoot || findProjectRoot(parsedFiles);
+
+  // Create path resolver with tsconfig support
+  const pathResolver = effectiveProjectRoot
+    ? createPathResolver({ projectRoot: effectiveProjectRoot })
+    : null;
+
   // Build maps for quick lookup
   const filesByPath = new Map<string, ParsedFile>();
   parsedFiles.forEach(file => {
@@ -35,9 +45,13 @@ export function buildModuleGraph(parsedFiles: ParsedFile[]): ModuleGraph {
   // Build dependency graph
   parsedFiles.forEach(file => {
     file.imports.forEach(importInfo => {
-      const resolvedPath = resolveImportPath(file.file, importInfo.source);
+      const resolvedPath = resolveImportPathWithResolver(
+        file.file,
+        importInfo.source,
+        pathResolver
+      );
       const targetFile = findFileByPath(parsedFiles, resolvedPath);
-      
+
       if (targetFile) {
         const dependency: ModuleDependency = {
           from: file.file,
@@ -45,7 +59,7 @@ export function buildModuleGraph(parsedFiles: ParsedFile[]): ModuleGraph {
           importedItems: importInfo.imports,
           line: importInfo.line,
         };
-        
+
         const fileDeps = dependencies.get(file.file) || [];
         fileDeps.push(dependency);
         dependencies.set(file.file, fileDeps);
@@ -61,6 +75,52 @@ export function buildModuleGraph(parsedFiles: ParsedFile[]): ModuleGraph {
     exports,
     crossFileCycles,
   };
+}
+
+/**
+ * Find project root by looking for tsconfig.json or package.json
+ */
+function findProjectRoot(parsedFiles: ParsedFile[]): string | null {
+  if (parsedFiles.length === 0) return null;
+
+  // Start from the first file's directory
+  let dir = path.dirname(parsedFiles[0].file);
+  const root = path.parse(dir).root;
+
+  while (dir !== root) {
+    // Look for tsconfig.json, jsconfig.json, or package.json
+    const tsconfigPath = path.join(dir, 'tsconfig.json');
+    const jsconfigPath = path.join(dir, 'jsconfig.json');
+    const packagePath = path.join(dir, 'package.json');
+
+    if (fs.existsSync(tsconfigPath) || fs.existsSync(jsconfigPath) || fs.existsSync(packagePath)) {
+      return dir;
+    }
+
+    dir = path.dirname(dir);
+  }
+
+  return null;
+}
+
+/**
+ * Resolve import path using the path resolver with tsconfig support
+ */
+function resolveImportPathWithResolver(
+  fromFile: string,
+  importPath: string,
+  pathResolver: PathResolver | null
+): string {
+  // Try using the path resolver first (handles aliases and relative imports)
+  if (pathResolver && pathResolver.canResolve(importPath)) {
+    const resolved = pathResolver.resolve(fromFile, importPath);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  // Fallback to basic resolution
+  return resolveImportPath(fromFile, importPath);
 }
 
 function resolveImportPath(fromFile: string, importPath: string): string {

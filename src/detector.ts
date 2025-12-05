@@ -1,11 +1,13 @@
 import { glob } from 'glob';
 import * as path from 'path';
 import * as fs from 'fs';
+import micromatch from 'micromatch';
 import { parseFile, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { HooksDependencyAnalyzer, HooksDependencyLoop } from './hooks-dependency-analyzer';
 import { detectSimpleHooksLoops, SimpleHookLoop } from './simple-hooks-analyzer';
 import { detectImprovedHooksLoops, HooksLoop } from './improved-hooks-analyzer';
+import { analyzeHooksIntelligently, IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
 
 export interface CircularDependency {
   file: string;
@@ -20,6 +22,7 @@ export interface DetectionResults {
   hooksDependencyLoops: HooksDependencyLoop[];
   simpleHooksLoops: SimpleHookLoop[];
   improvedHooksLoops: HooksLoop[];
+  intelligentHooksAnalysis: IntelligentHookAnalysis[];
   summary: {
     filesAnalyzed: number;
     hooksAnalyzed: number;
@@ -28,6 +31,7 @@ export interface DetectionResults {
     hooksDependencyLoops: number;
     simpleHooksLoops: number;
     improvedHooksLoops: number;
+    intelligentAnalysisCount: number;
   };
 }
 
@@ -79,6 +83,9 @@ export async function detectCircularDependencies(
   // Run improved hooks loop detection
   const improvedHooksLoops = detectImprovedHooksLoops(parsedFiles);
   
+  // Run intelligent hooks analysis
+  const intelligentHooksAnalysis = analyzeHooksIntelligently(parsedFiles);
+  
   const totalHooks = parsedFiles.reduce((sum, file) => sum + file.hooks.length, 0);
   
   return {
@@ -87,6 +94,7 @@ export async function detectCircularDependencies(
     hooksDependencyLoops: hooksAnalysis.dependencyLoops,
     simpleHooksLoops: simpleHooksLoops,
     improvedHooksLoops: improvedHooksLoops,
+    intelligentHooksAnalysis: intelligentHooksAnalysis,
     summary: {
       filesAnalyzed: parsedFiles.length,
       hooksAnalyzed: totalHooks,
@@ -95,6 +103,7 @@ export async function detectCircularDependencies(
       hooksDependencyLoops: hooksAnalysis.dependencyLoops.length,
       simpleHooksLoops: simpleHooksLoops.length,
       improvedHooksLoops: improvedHooksLoops.length,
+      intelligentAnalysisCount: intelligentHooksAnalysis.length,
     },
   };
 }
@@ -132,11 +141,22 @@ function isLikelyReactFile(filePath: string): boolean {
 
 async function findFiles(targetPath: string, options: DetectorOptions): Promise<string[]> {
   const pattern = path.join(targetPath, options.pattern);
+
+  // Build ignore function for glob v11+
+  // Glob v11 uses a different ignore syntax - we need to use a function-based approach
+  const ignorePatterns = options.ignore || [];
+
   const files = await glob(pattern, {
-    ignore: options.ignore,
+    ignore: {
+      ignored: (p: any) => {
+        const fullPath = p.fullpath ? p.fullpath() : p;
+        // Use micromatch for robust glob pattern matching
+        return micromatch.isMatch(fullPath, ignorePatterns);
+      }
+    },
     absolute: true,
   });
-  
+
   // Filter out directories and files that are definitely not React files
   return files.filter(file => {
     try {

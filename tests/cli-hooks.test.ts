@@ -15,9 +15,9 @@ describe('CLI Hooks Output', () => {
         fail('Expected CLI to exit with error code due to detected issues');
       } catch (error: any) {
         const output = error.stdout || '';
-        
-        expect(output).toContain('React hooks dependency issues');
-        expect(output).toContain('Infinite re-render risk');
+
+        expect(output).toContain('CONFIRMED infinite loop');
+        expect(output).toContain('GUARANTEED infinite re-render');
         expect(output).toContain('high severity');
         expect(output).toContain('hooks-dependency-loop.tsx');
       }
@@ -31,13 +31,13 @@ describe('CLI Hooks Output', () => {
         fail('Expected CLI to exit with error code');
       } catch (error: any) {
         const output = error.stdout || '';
-        
-        expect(output).toContain('function: problematicFunction');
-        expect(output).toContain('Problem:');
-        expect(output).toContain('Depends on');
-        expect(output).toContain('isLoading → setIsLoading');
-        expect(output).toContain('Hook:');
-        expect(output).toContain('useCallback');
+
+        expect(output).toContain('📍 Location:');
+        expect(output).toContain('❌ Problem:');
+        expect(output).toContain('depends on');
+        expect(output).toContain('isLoading');
+        expect(output).toContain('setIsLoading');
+        expect(output).toContain('useEffect'); // Changed from useCallback - useEffect can cause confirmed loops
       }
     });
 
@@ -49,14 +49,14 @@ describe('CLI Hooks Output', () => {
         fail('Expected CLI to exit with error code');
       } catch (error: any) {
         const output = error.stdout || '';
-        
+
         expect(output).toContain('Summary:');
-        expect(output).toContain('Hooks issues:');
-        expect(output).toContain('Issues found:');
-        
+        expect(output).toContain('Critical issues:');
+        expect(output).toContain('Confirmed infinite loops:');
+
         // Should have non-zero counts
-        expect(output).toMatch(/Hooks issues: [1-9]/);
-        expect(output).toMatch(/Issues found: [1-9]/);
+        expect(output).toMatch(/Critical issues: [1-9]/);
+        expect(output).toMatch(/Confirmed infinite loops: [1-9]/);
       }
     });
 
@@ -83,35 +83,22 @@ describe('CLI Hooks Output', () => {
       }).toThrow();
     });
 
-    it('should only find medium-severity issues in clean hooks example', () => {
-      // The clean hooks example triggers a conservative false positive
-      expect(() => {
-        execSync(`node "${cliPath}" "${fixturesPath}" --pattern "clean-hooks-example.tsx"`, {
-          encoding: 'utf8'
-        });
-      }).toThrow();
-      
-      // Get the actual output from the error
-      try {
-        execSync(`node "${cliPath}" "${fixturesPath}" --pattern "clean-hooks-example.tsx"`, {
-          encoding: 'utf8'
-        });
-      } catch (error: any) {
-        const output = error.stdout || '';
-        
-        // Should contain exactly 1 medium severity issue (conservative false positive)
-        expect(output).toContain('Found 1 React hooks dependency issues');
-        expect(output).toContain('medium severity');
-        expect(output).not.toContain('high severity');
-        expect(output).toContain('useEffect');
-        expect(output).toContain('count');
-        expect(output).toContain('Issues found: 1');
-      }
+    it('should not find issues in clean hooks example with intelligent analyzer', () => {
+      // With the intelligent analyzer, clean hooks should not cause errors
+      const output = execSync(`node "${cliPath}" "${fixturesPath}" --pattern "clean-hooks-example.tsx"`, {
+        encoding: 'utf8'
+      });
+
+      expect(output).toContain('Summary:');
+      expect(output).toContain('No issues found');
+      expect(output).toContain('No React hooks dependency issues found');
+      expect(output).not.toContain('CONFIRMED infinite loop');
     });
   });
 
   describe('JSON Output', () => {
     it('should include hooks loops in JSON output', () => {
+      // JSON output still exits with error code when issues found, so use try/catch
       try {
         execSync(`node "${cliPath}" "${fixturesPath}" --pattern "hooks-dependency-loop.tsx" --json`, {
           encoding: 'utf8'
@@ -119,16 +106,22 @@ describe('CLI Hooks Output', () => {
         fail('Expected CLI to exit with error code');
       } catch (error: any) {
         const output = error.stdout || '';
-        
+
         expect(() => JSON.parse(output)).not.toThrow();
-        
+
         const result = JSON.parse(output);
-        expect(result).toHaveProperty('improvedHooksLoops');
-        expect(Array.isArray(result.improvedHooksLoops)).toBe(true);
-        expect(result.improvedHooksLoops.length).toBeGreaterThan(0);
-        
-        expect(result.summary).toHaveProperty('improvedHooksLoops');
-        expect(result.summary.improvedHooksLoops).toBeGreaterThan(0);
+        expect(result).toHaveProperty('intelligentHooksAnalysis');
+        expect(Array.isArray(result.intelligentHooksAnalysis)).toBe(true);
+        expect(result.intelligentHooksAnalysis.length).toBeGreaterThan(0);
+
+        // Check for confirmed infinite loops in intelligent analysis
+        const confirmedLoops = result.intelligentHooksAnalysis.filter(
+          (a: any) => a.type === 'confirmed-infinite-loop'
+        );
+        expect(confirmedLoops.length).toBeGreaterThan(0);
+
+        expect(result.summary).toHaveProperty('intelligentAnalysisCount');
+        expect(result.summary.intelligentAnalysisCount).toBeGreaterThan(0);
       }
     });
 
@@ -141,16 +134,28 @@ describe('CLI Hooks Output', () => {
       } catch (error: any) {
         const output = error.stdout || '';
         const result = JSON.parse(output);
-        
-        result.improvedHooksLoops.forEach((loop: any) => {
-          expect(loop).toHaveProperty('type');
-          expect(loop).toHaveProperty('description');
-          expect(loop).toHaveProperty('file');
-          expect(loop).toHaveProperty('line');
-          expect(loop).toHaveProperty('hookType');
-          expect(loop).toHaveProperty('problematicDependency');
-          expect(loop).toHaveProperty('severity');
+
+        // Check intelligent analyzer results (the primary analyzer)
+        expect(result.intelligentHooksAnalysis).toBeDefined();
+        expect(result.intelligentHooksAnalysis.length).toBeGreaterThan(0);
+
+        result.intelligentHooksAnalysis.forEach((analysis: any) => {
+          expect(analysis).toHaveProperty('type');
+          expect(analysis).toHaveProperty('description');
+          expect(analysis).toHaveProperty('file');
+          expect(analysis).toHaveProperty('line');
+          expect(analysis).toHaveProperty('hookType');
+          expect(analysis).toHaveProperty('problematicDependency');
+          expect(analysis).toHaveProperty('severity');
+          expect(analysis).toHaveProperty('confidence');
+          expect(analysis).toHaveProperty('explanation');
         });
+
+        // Check for at least one confirmed infinite loop
+        const hasConfirmedLoop = result.intelligentHooksAnalysis.some(
+          (a: any) => a.type === 'confirmed-infinite-loop'
+        );
+        expect(hasConfirmedLoop).toBe(true);
       }
     });
   });

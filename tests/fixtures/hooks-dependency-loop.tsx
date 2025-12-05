@@ -4,57 +4,38 @@ import React, { useState, useCallback, useEffect } from 'react';
 export const HooksDependencyLoopExample: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState(null);
-  const [backgroundActive, setBackgroundActive] = useState(false);
+  const [count, setCount] = useState(0);
 
-  // Pattern 1: useCallback that depends on state it modifies
+  // Pattern 1: CONFIRMED infinite loop - useEffect directly modifies its own dependency
+  useEffect(() => {
+    setIsLoading(!isLoading); // Directly modifies isLoading in useEffect - CONFIRMED LOOP!
+  }, [isLoading]);
+
+  // Pattern 2: CONFIRMED infinite loop - useEffect modifies dependency unconditionally
+  useEffect(() => {
+    setCount(count + 1); // Always increments count - CONFIRMED LOOP!
+  }, [count]);
+
+  // Pattern 3: useCallback that depends on state it modifies (potential, not confirmed)
+  // useCallback doesn't auto-execute, so this is only problematic if called from useEffect
   const problematicFunction = useCallback(async () => {
-    setIsLoading(true); // Modifies state it depends on
-    
-    // Simulate async work
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    setIsLoading(false);
-  }, [isLoading]); // Depends on isLoading but modifies it - LOOP!
+    setData({ value: 'new' }); // Modifies data
+  }, [data]); // Depends on data but modifies it - potential issue
 
-  // Pattern 2: Indirect state mutation through other functions
-  const startBackgroundTracking = useCallback(async () => {
-    // This function modifies backgroundActive
-    setBackgroundActive(true);
-    return true;
-  }, []);
-
-  const updateTrackingMode = useCallback(async () => {
-    // This function calls startBackgroundTracking which modifies backgroundActive
-    const success = await startBackgroundTracking();
-    console.log('Tracking updated:', success);
-  }, [backgroundActive, startBackgroundTracking]); // Depends on backgroundActive but indirectly modifies it
-
-  // Pattern 3: useEffect that depends on function creating loops
-  useEffect(() => {
-    updateTrackingMode(); // This creates an infinite loop
-  }, [updateTrackingMode]); // Effect re-runs when function recreates
-
-  // Pattern 4: More complex indirect loop
-  const fetchData = useCallback(async () => {
+  // Pattern 4: Safe - useCallback with guard
+  const safeFunction = useCallback(() => {
     if (!data) {
-      const result = await fetch('/api/data');
-      setData(result); // Modifies data
+      setData({ value: 'initial' });
     }
-  }, [data]); // Depends on data but modifies it
-
-  const processData = useCallback(() => {
-    fetchData(); // Calls function that modifies state
-  }, [fetchData]); // Depends on fetchData
-
-  useEffect(() => {
-    processData(); // Indirect loop: processData → fetchData → setData → data changes → fetchData recreates → processData recreates → effect runs
-  }, [processData]);
+  }, [data]); // Has guard, so it's safe
 
   return (
     <div>
       <p>Loading: {isLoading ? 'Yes' : 'No'}</p>
-      <p>Background Active: {backgroundActive ? 'Yes' : 'No'}</p>
+      <p>Count: {count}</p>
       <p>Data: {data ? 'Loaded' : 'None'}</p>
+      <button onClick={problematicFunction}>Load</button>
+      <button onClick={safeFunction}>Initialize</button>
     </div>
   );
 };

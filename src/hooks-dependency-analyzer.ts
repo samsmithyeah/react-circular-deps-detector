@@ -64,17 +64,8 @@ export class HooksDependencyAnalyzer {
       // Store hooks for this file
       this.hooks.set(file.file, file.hooks);
 
-      // Parse the file again to extract state setters and function calls
-      const fs = require('fs');
-      const babel = require('@babel/parser');
-      
-      const content = fs.readFileSync(file.file, 'utf-8');
-      const ast = babel.parse(content, {
-        sourceType: 'module',
-        plugins: ['typescript', 'jsx'],
-      });
-
-      this.extractStateSettersAndCalls(ast, file.file);
+      // Use the cached AST from ParsedFile instead of re-parsing
+      this.extractStateSettersAndCalls(file.ast, file.file);
     } catch (error) {
       console.warn(`Could not analyze hooks in ${file.file}:`, error);
     }
