@@ -104,7 +104,8 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
     // Use lookbehind to split on whitespace following a period (preserves periods in names/versions)
     const lines = issue.explanation.split(/(?<=\.)\s+/).filter((l) => l.trim());
     for (const line of lines) {
-      console.log(chalk.gray(`       ${line}${line.endsWith('.') ? '' : '.'}`));
+      const trimmedLine = line.trim();
+      console.log(chalk.gray(`       ${trimmedLine}${trimmedLine.endsWith('.') ? '' : '.'}`));
     }
   } else if (issue.type === 'confirmed-infinite-loop' && issue.setterFunction) {
     console.log(
