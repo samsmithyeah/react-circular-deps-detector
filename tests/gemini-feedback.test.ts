@@ -175,11 +175,10 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       expect(issues.some((i) => i.problematicDependency === 'value')).toBe(true);
     });
 
-    it('should flag custom hooks without setX pattern as potentially unstable', () => {
-      // When a custom hook doesn't follow the [state, setX] pattern,
-      // we can't assume its values are stable managed state.
-      // This is correct behavior - custom hooks without recognizable patterns
-      // should be treated as potentially unstable.
+    it('should NOT flag custom hooks (treated as stable by default)', () => {
+      // Custom hooks are treated as stable by default because they typically
+      // return stable values from state management libraries (Zustand, Redux, etc.)
+      // or from React's own hooks. Flagging them creates too many false positives.
       const parsed = createTestFile(`
         import React, { useEffect } from 'react';
         import { useCustomState } from './hooks';
@@ -198,10 +197,9 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       const results = analyzeHooksIntelligently([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
-      // Since 'updateValue' doesn't match 'setX' pattern, we can't assume this is
-      // managed state, so we correctly flag 'value' as potentially unstable
-      expect(infiniteLoops).toHaveLength(1);
-      expect(infiniteLoops[0].problematicDependency).toBe('value');
+      // Custom hooks are treated as stable to avoid false positives
+      // (most custom hooks wrap state management libraries that return stable values)
+      expect(infiniteLoops).toHaveLength(0);
     });
   });
 

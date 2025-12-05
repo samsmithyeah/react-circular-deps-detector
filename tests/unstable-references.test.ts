@@ -478,7 +478,11 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
       expect(unstableIssues).toHaveLength(0);
     });
 
-    it('should flag destructured variables from custom hooks as potentially unstable', async () => {
+    // Custom hooks are treated as stable by default to reduce false positives.
+    // In practice, most custom hooks return stable values from state management
+    // (Zustand, Redux, etc.) or memoized values. Flagging all custom hook returns
+    // as unstable causes too many false positives in real applications.
+    it('should NOT flag destructured variables from custom hooks (treated as stable)', async () => {
       const testFile = path.join(tempDir, 'DestructuredFromCustomHook.tsx');
       fs.writeFileSync(
         testFile,
@@ -490,11 +494,11 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
         }
 
         function DestructuredFromCustomHook() {
-          const { value } = useCustomHook(); // Custom hook - NOT guaranteed stable
+          const { value } = useCustomHook(); // Custom hooks treated as stable to reduce false positives
 
           useEffect(() => {
             console.log(value);
-          }, [value]); // Potentially unsafe - custom hooks can return new refs
+          }, [value]); // Not flagged - custom hooks are assumed stable
 
           return <div />;
         }
@@ -506,11 +510,12 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
         ignore: [],
       });
 
+      // Custom hook returns are NOT flagged to reduce false positives
       const unstableIssues = result.intelligentHooksAnalysis.filter(
         (issue) =>
           issue.type === 'confirmed-infinite-loop' && issue.problematicDependency === 'value'
       );
-      expect(unstableIssues).toHaveLength(1);
+      expect(unstableIssues).toHaveLength(0);
     });
 
     it('should detect nested destructured variables from unstable sources', async () => {
