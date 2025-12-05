@@ -71,7 +71,8 @@ program
       const criticalIssues = results.circularDependencies.length + results.crossFileCycles.length;
       const confirmedLoops = results.intelligentHooksAnalysis
         ? results.intelligentHooksAnalysis.filter(
-            (issue) => issue.type === 'confirmed-infinite-loop'
+            (issue) =>
+              issue.type === 'confirmed-infinite-loop' || issue.type === 'unstable-reference'
           ).length
         : results.hooksDependencyLoops.length +
           results.simpleHooksLoops.length +
@@ -97,7 +98,15 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
 
   // Show the problem in simple terms
   console.log(chalk.blue(`    ❌ Problem:`));
-  if (issue.type === 'confirmed-infinite-loop') {
+
+  // Use the explanation field if available - it contains the most accurate description
+  if (issue.explanation) {
+    // Split long explanations into multiple lines for readability
+    const lines = issue.explanation.split('. ').filter((l) => l.trim());
+    for (const line of lines) {
+      console.log(chalk.gray(`       ${line}${line.endsWith('.') ? '' : '.'}`));
+    }
+  } else if (issue.type === 'confirmed-infinite-loop' && issue.setterFunction) {
     console.log(
       chalk.gray(
         `       This hook depends on '${issue.problematicDependency}' and modifies it, creating an infinite loop:`
@@ -108,7 +117,7 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
         `       ${issue.problematicDependency} changes → hook runs → calls ${issue.setterFunction}() → ${issue.problematicDependency} changes → repeats forever`
       )
     );
-  } else {
+  } else if (issue.type === 'potential-issue') {
     console.log(
       chalk.gray(
         `       This hook depends on '${issue.problematicDependency}' and conditionally modifies it.`
@@ -116,6 +125,12 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
     );
     console.log(
       chalk.gray(`       If the condition doesn't prevent updates, this creates an infinite loop.`)
+    );
+  } else {
+    console.log(
+      chalk.gray(
+        `       Issue with dependency '${issue.problematicDependency}' in ${issue.hookType}.`
+      )
     );
   }
   console.log();
@@ -152,8 +167,11 @@ function formatResults(results: DetectionResults) {
   const useIntelligentAnalysis = intelligentHooksAnalysis && intelligentHooksAnalysis.length > 0;
 
   // For intelligent analysis, separate by severity type
+  // Include unstable-reference issues with confirmed issues (they are critical bugs)
   const confirmedIssues = useIntelligentAnalysis
-    ? intelligentHooksAnalysis.filter((issue) => issue.type === 'confirmed-infinite-loop')
+    ? intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'unstable-reference'
+      )
     : [];
   const potentialIssues = useIntelligentAnalysis
     ? intelligentHooksAnalysis.filter((issue) => issue.type === 'potential-issue')
