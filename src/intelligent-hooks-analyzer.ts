@@ -370,13 +370,25 @@ const STABLE_FUNCTION_CALLS = new Set([
 ]);
 
 /**
+ * React hooks that are guaranteed to return stable values/references.
+ * Note: useState and useReducer return tuples where the setter/dispatch is stable,
+ * but we handle those via destructuring patterns separately.
+ * Custom hooks (any other `use*` function) are NOT assumed stable since they
+ * can return new objects or arrays on every render.
+ */
+const STABLE_REACT_HOOKS = new Set([
+  'useRef', // Returns stable ref object
+  'useId', // Returns stable string ID
+]);
+
+/**
  * Check if a CallExpression is a stable function call (returns primitive or stable value)
  */
 function isStableFunctionCall(init: t.CallExpression): boolean {
   const callee = init.callee;
 
-  // React hooks return stable references
-  if (t.isIdentifier(callee) && callee.name.startsWith('use')) {
+  // Only specific React hooks are guaranteed to return stable references
+  if (t.isIdentifier(callee) && STABLE_REACT_HOOKS.has(callee.name)) {
     return true;
   }
 
@@ -518,6 +530,32 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           return;
         }
 
+        // Track custom hooks that follow the [state, setState] pattern
+        // These are treated as state-like even though the hook itself isn't guaranteed stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name.startsWith('use') &&
+          init.callee.name !== 'useState'
+        ) {
+          const elements = id.elements;
+          if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
+            const secondElement = elements[1].name;
+            // If second element looks like a setter (starts with 'set' + uppercase),
+            // treat this as a state pattern - the first element is managed state
+            if (
+              secondElement.startsWith('set') &&
+              secondElement.length > 3 &&
+              secondElement[3] === secondElement[3].toUpperCase()
+            ) {
+              for (const name of extractIdentifiersFromPattern(id)) {
+                stateVars.add(name);
+              }
+              return;
+            }
+          }
+        }
+
         // Skip stable function calls (React hooks, parseInt, etc.)
         if (t.isCallExpression(init) && isStableFunctionCall(init)) {
           return;
@@ -532,6 +570,37 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
 
       // Handle object destructuring: const { a, b } = ... or const { data: { user } } = ...
       if (t.isObjectPattern(id)) {
+        // Track useContext patterns with state/setter pairs: const { data, setData } = useContext(...)
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name === 'useContext'
+        ) {
+          const properties = id.properties;
+          const extractedNames: string[] = [];
+
+          // Collect all destructured names
+          for (const prop of properties) {
+            if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
+              extractedNames.push(prop.value.name);
+            } else if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
+              extractedNames.push(prop.key.name);
+            }
+          }
+
+          // Mark state variables (those with matching setters) as stable
+          for (const name of extractedNames) {
+            if (name.startsWith('set') && name.length > 3 && name[3] === name[3].toUpperCase()) {
+              const stateVar = name.charAt(3).toLowerCase() + name.slice(4);
+              if (extractedNames.includes(stateVar)) {
+                stateVars.add(stateVar);
+                stateVars.add(name); // setter is also stable
+              }
+            }
+          }
+          return;
+        }
+
         // Skip stable function calls (React hooks, parseInt, etc.)
         if (t.isCallExpression(init) && isStableFunctionCall(init)) {
           return;

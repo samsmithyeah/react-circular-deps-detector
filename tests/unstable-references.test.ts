@@ -445,23 +445,20 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
       expect(unstableIssues[0].problematicDependency).toBe('a');
     });
 
-    it('should NOT flag destructured variables from React hooks', async () => {
+    it('should NOT flag destructured variables from built-in React hooks', async () => {
       const testFile = path.join(tempDir, 'DestructuredFromHook.tsx');
       fs.writeFileSync(
         testFile,
         `
-        import { useEffect, useState } from 'react';
-
-        function useCustomHook() {
-          return { value: 1, setValue: () => {} };
-        }
+        import { useEffect, useState, useRef } from 'react';
 
         function DestructuredFromHook() {
-          const { value, setValue } = useCustomHook(); // From hook - stable
+          const [count, setCount] = useState(0); // useState - stable values
+          const ref = useRef(null); // useRef - stable reference
 
           useEffect(() => {
-            console.log(value);
-          }, [value]); // Safe - hook return values are managed by React
+            console.log(count, ref.current);
+          }, [count]); // Safe - useState value is tracked by React
 
           return <div />;
         }
@@ -479,6 +476,41 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
           issue.explanation?.match(/unstable|reference/i)
       );
       expect(unstableIssues).toHaveLength(0);
+    });
+
+    it('should flag destructured variables from custom hooks as potentially unstable', async () => {
+      const testFile = path.join(tempDir, 'DestructuredFromCustomHook.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect } from 'react';
+
+        function useCustomHook() {
+          return { value: { data: 1 } }; // Returns new object every render
+        }
+
+        function DestructuredFromCustomHook() {
+          const { value } = useCustomHook(); // Custom hook - NOT guaranteed stable
+
+          useEffect(() => {
+            console.log(value);
+          }, [value]); // Potentially unsafe - custom hooks can return new refs
+
+          return <div />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          issue.type === 'confirmed-infinite-loop' && issue.problematicDependency === 'value'
+      );
+      expect(unstableIssues).toHaveLength(1);
     });
 
     it('should detect nested destructured variables from unstable sources', async () => {
