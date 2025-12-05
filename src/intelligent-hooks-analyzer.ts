@@ -13,7 +13,7 @@ interface HookNodeInfo {
 }
 
 export interface IntelligentHookAnalysis {
-  type: 'confirmed-infinite-loop' | 'potential-issue' | 'safe-pattern' | 'unstable-reference';
+  type: 'confirmed-infinite-loop' | 'potential-issue' | 'safe-pattern';
   description: string;
   file: string;
   line: number;
@@ -396,10 +396,97 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
     VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
       const id = nodePath.node.id;
       const init = nodePath.node.init;
+      const line = nodePath.node.loc?.start.line || 0;
 
+      // Handle array destructuring: const [a, b] = ...
+      if (t.isArrayPattern(id)) {
+        // Track array destructuring from useState - these are stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name === 'useState'
+        ) {
+          for (const el of id.elements) {
+            if (t.isIdentifier(el)) {
+              stateVars.add(el.name);
+            }
+          }
+          return;
+        }
+
+        // Track array destructuring from other React hooks - stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name.startsWith('use')
+        ) {
+          return; // Hook return values are managed by React
+        }
+
+        // Inside component: destructuring from unstable source
+        if (componentDepth > 0 && init) {
+          const isUnstableSource =
+            t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
+          if (isUnstableSource) {
+            for (const el of id.elements) {
+              if (t.isIdentifier(el)) {
+                unstableVars.set(el.name, {
+                  name: el.name,
+                  type: 'function-call',
+                  line,
+                  isMemoized: false,
+                  isModuleLevel: false,
+                });
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      // Handle object destructuring: const { a, b } = ...
+      if (t.isObjectPattern(id)) {
+        // Track object destructuring from React hooks - stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name.startsWith('use')
+        ) {
+          return; // Hook return values are managed by React
+        }
+
+        // Inside component: destructuring from unstable source
+        if (componentDepth > 0 && init) {
+          const isUnstableSource =
+            t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
+          if (isUnstableSource) {
+            for (const prop of id.properties) {
+              if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
+                unstableVars.set(prop.value.name, {
+                  name: prop.value.name,
+                  type: 'function-call',
+                  line,
+                  isMemoized: false,
+                  isModuleLevel: false,
+                });
+              } else if (t.isRestElement(prop) && t.isIdentifier(prop.argument)) {
+                unstableVars.set(prop.argument.name, {
+                  name: prop.argument.name,
+                  type: 'function-call',
+                  line,
+                  isMemoized: false,
+                  isModuleLevel: false,
+                });
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      // Simple identifier assignment: const x = ...
       if (!t.isIdentifier(id)) return;
       const varName = id.name;
-      const line = nodePath.node.loc?.start.line || 0;
 
       // Check if this is a useState call - track state variables
       if (
@@ -407,25 +494,7 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         t.isIdentifier(init.callee) &&
         init.callee.name === 'useState'
       ) {
-        // Handle array destructuring: const [state, setState] = useState()
-        // This is handled elsewhere, but we need to track state vars
-        return;
-      }
-
-      // Track array destructuring from useState
-      if (t.isArrayPattern(nodePath.node.id)) {
-        if (
-          t.isCallExpression(init) &&
-          t.isIdentifier(init.callee) &&
-          init.callee.name === 'useState'
-        ) {
-          const elements = nodePath.node.id.elements;
-          for (const el of elements) {
-            if (t.isIdentifier(el)) {
-              stateVars.add(el.name);
-            }
-          }
-        }
+        stateVars.add(varName);
         return;
       }
 

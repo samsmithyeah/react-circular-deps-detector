@@ -407,5 +407,78 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
       );
       expect(unstableIssues.length).toBeGreaterThan(0);
     });
+
+    it('should detect destructured variables from unstable function calls', async () => {
+      const testFile = path.join(tempDir, 'DestructuredUnstable.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect, useState } from 'react';
+
+        function getUnstableObject() {
+          return { a: Math.random(), b: 'test' };
+        }
+
+        function DestructuredUnstable() {
+          const [data, setData] = useState(null);
+
+          const { a, b } = getUnstableObject(); // Destructured from unstable source
+
+          useEffect(() => {
+            setData({ a, b });
+          }, [a]); // 'a' is unstable - new value each render
+
+          return <div />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue'
+      );
+      expect(unstableIssues.length).toBeGreaterThan(0);
+      expect(unstableIssues[0].problematicDependency).toBe('a');
+    });
+
+    it('should NOT flag destructured variables from React hooks', async () => {
+      const testFile = path.join(tempDir, 'DestructuredFromHook.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect, useState } from 'react';
+
+        function useCustomHook() {
+          return { value: 1, setValue: () => {} };
+        }
+
+        function DestructuredFromHook() {
+          const { value, setValue } = useCustomHook(); // From hook - stable
+
+          useEffect(() => {
+            console.log(value);
+          }, [value]); // Safe - hook return values are managed by React
+
+          return <div />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          issue.type === 'confirmed-infinite-loop' &&
+          issue.explanation?.match(/unstable|reference/i)
+      );
+      expect(unstableIssues).toHaveLength(0);
+    });
   });
 });

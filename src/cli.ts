@@ -71,8 +71,7 @@ program
       const criticalIssues = results.circularDependencies.length + results.crossFileCycles.length;
       const confirmedLoops = results.intelligentHooksAnalysis
         ? results.intelligentHooksAnalysis.filter(
-            (issue) =>
-              issue.type === 'confirmed-infinite-loop' || issue.type === 'unstable-reference'
+            (issue) => issue.type === 'confirmed-infinite-loop'
           ).length
         : results.hooksDependencyLoops.length +
           results.simpleHooksLoops.length +
@@ -167,11 +166,8 @@ function formatResults(results: DetectionResults) {
   const useIntelligentAnalysis = intelligentHooksAnalysis && intelligentHooksAnalysis.length > 0;
 
   // For intelligent analysis, separate by severity type
-  // Include unstable-reference issues with confirmed issues (they are critical bugs)
   const confirmedIssues = useIntelligentAnalysis
-    ? intelligentHooksAnalysis.filter(
-        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'unstable-reference'
-      )
+    ? intelligentHooksAnalysis.filter((issue) => issue.type === 'confirmed-infinite-loop')
     : [];
   const potentialIssues = useIntelligentAnalysis
     ? intelligentHooksAnalysis.filter((issue) => issue.type === 'potential-issue')
