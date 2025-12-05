@@ -20,7 +20,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "knip:fix": "knip --fix"
+    "knip:fix": "knip --fix",
+    "check:all": "npm run lint && npm run format:check && npm run knip",
+    "fix:all": "npm run lint:fix && npm run format && npm run knip:fix"
   },
   "keywords": [
     "react",

@@ -554,5 +554,39 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
       expect(unstableIssues.length).toBeGreaterThan(0);
       expect(unstableIssues[0].problematicDependency).toBe('a');
     });
+
+    it('should detect unstable references in function expression components', async () => {
+      const testFile = path.join(tempDir, 'FunctionExpressionComponent.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect, useState } from 'react';
+
+        // Component defined with function expression
+        const MyComponent = function() {
+          const [data, setData] = useState(null);
+
+          const config = { timeout: 5000 }; // Unstable object
+
+          useEffect(() => {
+            fetch('/api', config).then(r => r.json()).then(setData);
+          }, [config]); // Infinite loop
+
+          return <div />;
+        };
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue'
+      );
+      expect(unstableIssues.length).toBeGreaterThan(0);
+      expect(unstableIssues[0].problematicDependency).toBe('config');
+    });
   });
 });

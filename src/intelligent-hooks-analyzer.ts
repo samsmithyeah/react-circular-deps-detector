@@ -669,6 +669,31 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         }
       },
     },
+
+    // Track function expression components: const MyComponent = function() { ... }
+    FunctionExpression: {
+      enter(nodePath: NodePath<t.FunctionExpression>) {
+        // Check if parent is a variable declarator with PascalCase name
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth++;
+        }
+      },
+      exit(nodePath: NodePath<t.FunctionExpression>) {
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth--;
+        }
+      },
+    },
   });
 
   // Remove any variables that are actually memoized, state, refs, or module-level
