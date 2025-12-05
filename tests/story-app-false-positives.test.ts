@@ -406,7 +406,9 @@ describe('Story-App False Positives', () => {
       // SHOULD be flagged as potential issue (performance concern)
       expect(potentialIssues.length).toBeGreaterThan(0);
       expect(potentialIssues[0].problematicDependency).toBe('subscriptions');
-      expect(potentialIssues[0].severity).toBe('medium');
+      // Performance issues (unstable references) now have low severity
+      expect(potentialIssues[0].severity).toBe('low');
+      expect(potentialIssues[0].category).toBe('performance');
     });
 
     it('SHOULD flag as confirmed-infinite-loop when setState is unconditional', () => {

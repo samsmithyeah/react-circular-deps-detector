@@ -1,12 +1,15 @@
 import { glob, Path } from 'glob';
 import * as path from 'path';
 import * as fs from 'fs';
+import { cpus } from 'os';
 import micromatch from 'micromatch';
+import Piscina from 'piscina';
 import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { analyzeHooksIntelligently, IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
 import { loadConfig, RcdConfig, severityLevel, confidenceLevel, DEFAULT_CONFIG } from './config';
 import { AstCache } from './cache';
+import type { ParseResult, ParseTask } from './parse-worker';
 
 export interface CircularDependency {
   file: string;
@@ -35,7 +38,16 @@ export interface DetectorOptions {
   config?: RcdConfig;
   /** Enable caching for improved performance on repeated runs */
   cache?: boolean;
+  /** Enable debug mode to collect detailed decision information */
+  debug?: boolean;
+  /** Enable parallel parsing using worker threads (improves performance for large codebases) */
+  parallel?: boolean;
+  /** Number of worker threads (default: number of CPU cores) */
+  workers?: number;
 }
+
+// Minimum file count to benefit from parallel processing
+const PARALLEL_THRESHOLD = 20;
 
 export async function detectCircularDependencies(
   targetPath: string,
@@ -49,31 +61,25 @@ export async function detectCircularDependencies(
   const mergedOptions = { ...options, ignore: mergedIgnore };
 
   const files = await findFiles(targetPath, mergedOptions);
-  const parsedFiles: ParsedFile[] = [];
 
-  // Initialize cache if enabled
-  const astCache = options.cache ? new AstCache(targetPath) : undefined;
+  // Filter to React files first
+  const reactFiles = files.filter((file) => isLikelyReactFile(file));
 
-  for (const file of files) {
-    // Skip files that are definitely not React components
-    if (!isLikelyReactFile(file)) {
-      continue;
-    }
+  // Decide whether to use parallel processing
+  // Use parallel if explicitly enabled OR if we have many files and it wasn't explicitly disabled
+  const useParallel =
+    options.parallel === true ||
+    (options.parallel !== false && reactFiles.length >= PARALLEL_THRESHOLD && !options.cache);
 
-    try {
-      const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
-      parsedFiles.push(parsed);
-    } catch (error) {
-      // Only show warnings if not in quiet mode (we'll add a flag for this later)
-      if (process.env.NODE_ENV !== 'test') {
-        console.warn(`Warning: Could not parse ${file}:`, error);
-      }
-    }
-  }
+  let parsedFiles: ParsedFile[];
 
-  // Save cache at the end if caching is enabled
-  if (astCache) {
-    astCache.save();
+  if (useParallel) {
+    parsedFiles = await parseFilesParallel(reactFiles, options.workers);
+  } else {
+    parsedFiles = parseFilesSequential(
+      reactFiles,
+      options.cache ? new AstCache(targetPath) : undefined
+    );
   }
 
   const circularDeps = findCircularDependencies(parsedFiles);
@@ -90,6 +96,7 @@ export async function detectCircularDependencies(
     stableHooks: config.stableHooks,
     unstableHooks: config.unstableHooks,
     customFunctions: config.customFunctions,
+    debug: options.debug,
   });
 
   // Filter results based on config
@@ -126,6 +133,77 @@ export async function detectCircularDependencies(
       intelligentAnalysisCount: intelligentHooksAnalysis.length,
     },
   };
+}
+
+/**
+ * Parse files sequentially (used when caching is enabled or for small file counts)
+ */
+function parseFilesSequential(files: string[], astCache?: AstCache): ParsedFile[] {
+  const parsedFiles: ParsedFile[] = [];
+
+  for (const file of files) {
+    try {
+      const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
+      parsedFiles.push(parsed);
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'test') {
+        console.warn(`Warning: Could not parse ${file}:`, error);
+      }
+    }
+  }
+
+  // Save cache at the end if caching is enabled
+  if (astCache) {
+    astCache.save();
+  }
+
+  return parsedFiles;
+}
+
+/**
+ * Parse files in parallel using worker threads (faster for large codebases)
+ */
+async function parseFilesParallel(files: string[], numWorkers?: number): Promise<ParsedFile[]> {
+  const workerCount = numWorkers ?? Math.max(1, cpus().length - 1);
+
+  // Create worker pool
+  const piscina = new Piscina({
+    filename: path.join(__dirname, 'parse-worker.js'),
+    maxThreads: workerCount,
+    idleTimeout: 5000,
+  });
+
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    !process.argv.includes('--json') &&
+    !process.argv.includes('--sarif')
+  ) {
+    console.log(`Parsing ${files.length} files using ${workerCount} worker threads...`);
+  }
+
+  // Submit all parsing tasks
+  const tasks: Promise<ParseResult>[] = files.map((filePath) =>
+    piscina.run({ filePath } as ParseTask)
+  );
+
+  // Wait for all tasks to complete
+  const results = await Promise.all(tasks);
+
+  // Collect successful results
+  const parsedFiles: ParsedFile[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.success && result.data) {
+      parsedFiles.push(result.data);
+    } else if (process.env.NODE_ENV !== 'test') {
+      console.warn(`Warning: Could not parse ${files[i]}: ${result.error}`);
+    }
+  }
+
+  // Destroy the worker pool
+  await piscina.destroy();
+
+  return parsedFiles;
 }
 
 function isLikelyReactFile(filePath: string): boolean {

@@ -62,10 +62,11 @@
     "LICENSE"
   ],
   "devDependencies": {
-    "@babel/parser": "^7.27.5",
-    "@babel/traverse": "^7.27.4",
-    "@babel/types": "^7.27.6",
+    "@babel/parser": "^7.28.5",
+    "@babel/traverse": "^7.28.5",
+    "@babel/types": "^7.28.5",
     "@eslint/js": "^9.39.1",
+    "@types/babel__code-frame": "^7.0.6",
     "@types/babel__traverse": "^7.20.7",
     "@types/jest": "^30.0.0",
     "@types/micromatch": "^4.0.10",
@@ -81,10 +82,13 @@
     "typescript-eslint": "^8.48.1"
   },
   "dependencies": {
+    "@babel/code-frame": "^7.27.1",
     "chalk": "^4.1.2",
+    "chokidar": "^5.0.0",
     "commander": "^14.0.0",
     "get-tsconfig": "^4.13.0",
     "glob": "^11.0.3",
-    "micromatch": "^4.0.8"
+    "micromatch": "^4.0.8",
+    "piscina": "^5.1.4"
   }
 }

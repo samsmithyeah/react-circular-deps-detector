@@ -177,4 +177,41 @@ describe('Hooks Integration Tests', () => {
       });
     });
   });
+
+  describe('useRef Mutation Detection', () => {
+    it('should detect ref mutations that store state values with ref dependencies', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'ref-mutation-example.tsx',
+        ignore: [],
+      });
+
+      // Should find at least one ref mutation issue (RLD-600)
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+
+      expect(refMutationIssues.length).toBeGreaterThanOrEqual(1);
+      expect(refMutationIssues[0].type).toBe('potential-issue');
+      expect(refMutationIssues[0].category).toBe('warning');
+      expect(refMutationIssues[0].explanation).toContain('ref');
+    });
+
+    it('should not flag safe ref mutations without ref dependencies', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'ref-mutation-example.tsx',
+        ignore: [],
+      });
+
+      // Safe patterns should not produce RLD-600 for the SafeRefMutation component
+      const allIssues = results.intelligentHooksAnalysis;
+
+      // Should have detected the file
+      expect(results.summary.filesAnalyzed).toBe(1);
+
+      // Verify that the safe patterns don't have multiple RLD-600 issues
+      // (only the problematic one should be flagged)
+      const refMutationIssues = allIssues.filter((issue) => issue.errorCode === 'RLD-600');
+      expect(refMutationIssues.length).toBeLessThanOrEqual(1);
+    });
+  });
 });
