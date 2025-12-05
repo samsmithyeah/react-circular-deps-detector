@@ -101,7 +101,8 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
   // Use the explanation field if available - it contains the most accurate description
   if (issue.explanation) {
     // Split long explanations into multiple lines for readability
-    const lines = issue.explanation.split('. ').filter((l) => l.trim());
+    // Use lookbehind to split on whitespace following a period (preserves periods in names/versions)
+    const lines = issue.explanation.split(/(?<=\.)\s+/).filter((l) => l.trim());
     for (const line of lines) {
       console.log(chalk.gray(`       ${line}${line.endsWith('.') ? '' : '.'}`));
     }

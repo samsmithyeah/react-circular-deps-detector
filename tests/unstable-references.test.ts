@@ -480,5 +480,79 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
       );
       expect(unstableIssues).toHaveLength(0);
     });
+
+    it('should detect nested destructured variables from unstable sources', async () => {
+      const testFile = path.join(tempDir, 'NestedDestructure.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect, useState } from 'react';
+
+        function getNestedData() {
+          return { data: { user: { name: 'John' } } };
+        }
+
+        function NestedDestructure() {
+          const [result, setResult] = useState(null);
+
+          const { data: { user } } = getNestedData(); // Nested destructuring
+
+          useEffect(() => {
+            setResult(user);
+          }, [user]); // 'user' is from unstable source
+
+          return <div />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue'
+      );
+      expect(unstableIssues.length).toBeGreaterThan(0);
+      expect(unstableIssues[0].problematicDependency).toBe('user');
+    });
+
+    it('should detect nested array destructured variables from unstable sources', async () => {
+      const testFile = path.join(tempDir, 'NestedArrayDestructure.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useEffect, useState } from 'react';
+
+        function getNestedArray() {
+          return [[1, 2], [3, 4]];
+        }
+
+        function NestedArrayDestructure() {
+          const [result, setResult] = useState(null);
+
+          const [[a, b], [c, d]] = getNestedArray(); // Nested array destructuring
+
+          useEffect(() => {
+            setResult(a + b);
+          }, [a]); // 'a' is from unstable source
+
+          return <div />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const unstableIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue'
+      );
+      expect(unstableIssues.length).toBeGreaterThan(0);
+      expect(unstableIssues[0].problematicDependency).toBe('a');
+    });
   });
 });

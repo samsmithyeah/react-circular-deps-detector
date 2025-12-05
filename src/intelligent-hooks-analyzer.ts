@@ -389,6 +389,51 @@ function isStableFunctionCall(init: t.CallExpression): boolean {
 }
 
 /**
+ * Determine the appropriate type for an unstable variable based on its initializer
+ */
+function getUnstableVarType(init: t.Expression | null | undefined): UnstableVariable['type'] {
+  if (t.isArrayExpression(init)) return 'array';
+  if (t.isObjectExpression(init)) return 'object';
+  if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) return 'function';
+  return 'function-call';
+}
+
+/**
+ * Recursively extract all identifier names from a destructuring pattern.
+ * Handles nested patterns like: const { data: { user } } = obj
+ * or: const [a, [b, c]] = arr
+ */
+function extractIdentifiersFromPattern(pattern: t.LVal): string[] {
+  const identifiers: string[] = [];
+
+  if (t.isIdentifier(pattern)) {
+    identifiers.push(pattern.name);
+  } else if (t.isArrayPattern(pattern)) {
+    for (const element of pattern.elements) {
+      if (element) {
+        identifiers.push(...extractIdentifiersFromPattern(element));
+      }
+    }
+  } else if (t.isObjectPattern(pattern)) {
+    for (const prop of pattern.properties) {
+      if (t.isObjectProperty(prop)) {
+        // The value could be an identifier or another pattern
+        identifiers.push(...extractIdentifiersFromPattern(prop.value as t.LVal));
+      } else if (t.isRestElement(prop)) {
+        identifiers.push(...extractIdentifiersFromPattern(prop.argument));
+      }
+    }
+  } else if (t.isRestElement(pattern)) {
+    identifiers.push(...extractIdentifiersFromPattern(pattern.argument));
+  } else if (t.isAssignmentPattern(pattern)) {
+    // Handle default values: const { a = 1 } = obj or const [a = 1] = arr
+    identifiers.push(...extractIdentifiersFromPattern(pattern.left));
+  }
+
+  return identifiers;
+}
+
+/**
  * Extract local variables that are potentially unstable (recreated on each render).
  * This includes object literals, array literals, functions, and function call results
  * that are defined inside a component but not wrapped in useMemo/useCallback/useRef.
@@ -427,7 +472,7 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
       const init = nodePath.node.init;
       const line = nodePath.node.loc?.start.line || 0;
 
-      // Handle array destructuring: const [a, b] = ...
+      // Handle array destructuring: const [a, b] = ... or const [a, [b, c]] = ...
       if (t.isArrayPattern(id)) {
         // Track array destructuring from useState - these are stable
         if (
@@ -435,10 +480,9 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           t.isIdentifier(init.callee) &&
           init.callee.name === 'useState'
         ) {
-          for (const el of id.elements) {
-            if (t.isIdentifier(el)) {
-              stateVars.add(el.name);
-            }
+          // Use recursive extraction to handle all identifiers
+          for (const name of extractIdentifiersFromPattern(id)) {
+            stateVars.add(name);
           }
           return;
         }
@@ -455,24 +499,23 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
             t.isArrayExpression(init) ||
             t.isObjectExpression(init);
           if (isUnstableSource) {
-            const varType = t.isArrayExpression(init) ? 'array' : 'function-call';
-            for (const el of id.elements) {
-              if (t.isIdentifier(el)) {
-                unstableVars.set(el.name, {
-                  name: el.name,
-                  type: varType,
-                  line,
-                  isMemoized: false,
-                  isModuleLevel: false,
-                });
-              }
+            const varType = getUnstableVarType(init);
+            // Use recursive extraction to handle nested patterns
+            for (const name of extractIdentifiersFromPattern(id)) {
+              unstableVars.set(name, {
+                name,
+                type: varType,
+                line,
+                isMemoized: false,
+                isModuleLevel: false,
+              });
             }
           }
         }
         return;
       }
 
-      // Handle object destructuring: const { a, b } = ...
+      // Handle object destructuring: const { a, b } = ... or const { data: { user } } = ...
       if (t.isObjectPattern(id)) {
         // Skip stable function calls (React hooks, parseInt, etc.)
         if (t.isCallExpression(init) && isStableFunctionCall(init)) {
@@ -486,25 +529,16 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
             t.isArrayExpression(init) ||
             t.isObjectExpression(init);
           if (isUnstableSource) {
-            const varType = t.isObjectExpression(init) ? 'object' : 'function-call';
-            for (const prop of id.properties) {
-              if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
-                unstableVars.set(prop.value.name, {
-                  name: prop.value.name,
-                  type: varType,
-                  line,
-                  isMemoized: false,
-                  isModuleLevel: false,
-                });
-              } else if (t.isRestElement(prop) && t.isIdentifier(prop.argument)) {
-                unstableVars.set(prop.argument.name, {
-                  name: prop.argument.name,
-                  type: varType,
-                  line,
-                  isMemoized: false,
-                  isModuleLevel: false,
-                });
-              }
+            const varType = getUnstableVarType(init);
+            // Use recursive extraction to handle nested patterns
+            for (const name of extractIdentifiersFromPattern(id)) {
+              unstableVars.set(name, {
+                name,
+                type: varType,
+                line,
+                isMemoized: false,
+                isModuleLevel: false,
+              });
             }
           }
         }
