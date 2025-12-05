@@ -97,7 +97,17 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
 
   // Show the problem in simple terms
   console.log(chalk.blue(`    ❌ Problem:`));
-  if (issue.type === 'confirmed-infinite-loop') {
+
+  // Use the explanation field if available - it contains the most accurate description
+  if (issue.explanation) {
+    // Split long explanations into multiple lines for readability
+    // Use lookbehind to split on whitespace following a period (preserves periods in names/versions)
+    const lines = issue.explanation.split(/(?<=\.)\s+/).filter((l) => l.trim());
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      console.log(chalk.gray(`       ${trimmedLine}${trimmedLine.endsWith('.') ? '' : '.'}`));
+    }
+  } else if (issue.type === 'confirmed-infinite-loop' && issue.setterFunction) {
     console.log(
       chalk.gray(
         `       This hook depends on '${issue.problematicDependency}' and modifies it, creating an infinite loop:`
@@ -108,7 +118,7 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
         `       ${issue.problematicDependency} changes → hook runs → calls ${issue.setterFunction}() → ${issue.problematicDependency} changes → repeats forever`
       )
     );
-  } else {
+  } else if (issue.type === 'potential-issue') {
     console.log(
       chalk.gray(
         `       This hook depends on '${issue.problematicDependency}' and conditionally modifies it.`
@@ -116,6 +126,12 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
     );
     console.log(
       chalk.gray(`       If the condition doesn't prevent updates, this creates an infinite loop.`)
+    );
+  } else {
+    console.log(
+      chalk.gray(
+        `       Issue with dependency '${issue.problematicDependency}' in ${issue.hookType}.`
+      )
     );
   }
   console.log();

@@ -175,9 +175,11 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       expect(issues.some((i) => i.problematicDependency === 'value')).toBe(true);
     });
 
-    it('should NOT detect setters that do not follow naming convention', () => {
-      // Edge case: if the setter doesn't follow setX pattern, it won't be detected
-      // This documents a known limitation of heuristic-based detection
+    it('should flag custom hooks without setX pattern as potentially unstable', () => {
+      // When a custom hook doesn't follow the [state, setX] pattern,
+      // we can't assume its values are stable managed state.
+      // This is correct behavior - custom hooks without recognizable patterns
+      // should be treated as potentially unstable.
       const parsed = createTestFile(`
         import React, { useEffect } from 'react';
         import { useCustomState } from './hooks';
@@ -196,9 +198,10 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       const results = analyzeHooksIntelligently([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
-      // Known limitation: won't detect because 'updateValue' doesn't match 'setX' pattern
-      // This test documents the limitation
-      expect(infiniteLoops).toHaveLength(0);
+      // Since 'updateValue' doesn't match 'setX' pattern, we can't assume this is
+      // managed state, so we correctly flag 'value' as potentially unstable
+      expect(infiniteLoops).toHaveLength(1);
+      expect(infiniteLoops[0].problematicDependency).toBe('value');
     });
   });
 

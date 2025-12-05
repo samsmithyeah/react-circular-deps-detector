@@ -29,6 +29,17 @@ export interface IntelligentHookAnalysis {
   stateReads: string[];
 }
 
+/** Information about a local variable that may be recreated on each render */
+interface UnstableVariable {
+  name: string;
+  type: 'object' | 'array' | 'function' | 'function-call';
+  line: number;
+  /** True if wrapped in useMemo/useCallback/useRef */
+  isMemoized: boolean;
+  /** True if defined at module level (outside component) */
+  isModuleLevel: boolean;
+}
+
 interface StateInteraction {
   reads: string[];
   modifications: string[];
@@ -228,10 +239,26 @@ function analyzeFileIntelligently(
     // Extract state variables and their setters
     const stateInfo = extractStateInfo(ast);
 
+    // Extract unstable local variables (objects, arrays, functions created in component body)
+    const unstableVars = extractUnstableVariables(ast);
+
     // Analyze each hook
     const hookNodes = findHookNodes(ast);
 
     for (const hookNode of hookNodes) {
+      // First check for unstable reference issues
+      const unstableRefIssue = checkUnstableReferences(
+        hookNode,
+        unstableVars,
+        stateInfo,
+        file.file,
+        file.content
+      );
+      if (unstableRefIssue) {
+        results.push(unstableRefIssue);
+        continue; // Don't double-report the same hook
+      }
+
       const analysis = analyzeHookNode(
         hookNode,
         stateInfo,
@@ -255,12 +282,14 @@ function extractStateInfo(ast: t.Node) {
 
   traverse(ast, {
     VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
-      // Extract useState patterns: const [state, setState] = useState(...)
+      // Extract useState/useReducer patterns: const [state, setState] = useState(...)
+      // or const [state, dispatch] = useReducer(...)
       if (
         t.isArrayPattern(nodePath.node.id) &&
         t.isCallExpression(nodePath.node.init) &&
         t.isIdentifier(nodePath.node.init.callee) &&
-        nodePath.node.init.callee.name === 'useState'
+        (nodePath.node.init.callee.name === 'useState' ||
+          nodePath.node.init.callee.name === 'useReducer')
       ) {
         const elements = nodePath.node.id.elements;
         if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
@@ -330,6 +359,493 @@ function extractStateInfo(ast: t.Node) {
   });
 
   return stateVariables;
+}
+
+/** Function calls that return stable/primitive values */
+const STABLE_FUNCTION_CALLS = new Set([
+  'require',
+  'String',
+  'Number',
+  'Boolean',
+  'parseInt',
+  'parseFloat',
+]);
+
+/**
+ * React hooks that are guaranteed to return stable values/references.
+ * Note: useState and useReducer return tuples where the setter/dispatch is stable,
+ * but we handle those via destructuring patterns separately.
+ * Custom hooks (any other `use*` function) are NOT assumed stable since they
+ * can return new objects or arrays on every render.
+ */
+const STABLE_REACT_HOOKS = new Set([
+  'useRef', // Returns stable ref object
+  'useId', // Returns stable string ID
+]);
+
+/**
+ * Check if a CallExpression is a stable function call (returns primitive or stable value)
+ */
+function isStableFunctionCall(init: t.CallExpression): boolean {
+  const callee = init.callee;
+
+  // Only specific React hooks are guaranteed to return stable references
+  if (t.isIdentifier(callee) && STABLE_REACT_HOOKS.has(callee.name)) {
+    return true;
+  }
+
+  // Known stable function calls
+  if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Determine the appropriate type for an unstable variable based on its initializer
+ */
+function getUnstableVarType(init: t.Expression | null | undefined): UnstableVariable['type'] {
+  if (t.isArrayExpression(init)) return 'array';
+  if (t.isObjectExpression(init)) return 'object';
+  if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) return 'function';
+  return 'function-call';
+}
+
+/**
+ * Recursively extract all identifier names from a destructuring pattern.
+ * Handles nested patterns like: const { data: { user } } = obj
+ * or: const [a, [b, c]] = arr
+ */
+function extractIdentifiersFromPattern(pattern: t.LVal): string[] {
+  const identifiers: string[] = [];
+
+  if (t.isIdentifier(pattern)) {
+    identifiers.push(pattern.name);
+  } else if (t.isArrayPattern(pattern)) {
+    for (const element of pattern.elements) {
+      if (element) {
+        identifiers.push(...extractIdentifiersFromPattern(element));
+      }
+    }
+  } else if (t.isObjectPattern(pattern)) {
+    for (const prop of pattern.properties) {
+      if (t.isObjectProperty(prop)) {
+        // The value could be an identifier or another pattern
+        identifiers.push(...extractIdentifiersFromPattern(prop.value as t.LVal));
+      } else if (t.isRestElement(prop)) {
+        identifiers.push(...extractIdentifiersFromPattern(prop.argument));
+      }
+    }
+  } else if (t.isRestElement(pattern)) {
+    identifiers.push(...extractIdentifiersFromPattern(pattern.argument));
+  } else if (t.isAssignmentPattern(pattern)) {
+    // Handle default values: const { a = 1 } = obj or const [a = 1] = arr
+    identifiers.push(...extractIdentifiersFromPattern(pattern.left));
+  }
+
+  return identifiers;
+}
+
+/**
+ * Check if an initializer is an unstable source and add all destructured identifiers
+ * to the unstable variables map if so.
+ */
+function addUnstableDestructuredVariables(
+  id: t.LVal,
+  init: t.Expression | null | undefined,
+  line: number,
+  unstableVars: Map<string, UnstableVariable>
+): void {
+  if (!init) return;
+
+  const isUnstableSource =
+    (t.isCallExpression(init) && !isStableFunctionCall(init)) ||
+    t.isArrayExpression(init) ||
+    t.isObjectExpression(init);
+
+  if (isUnstableSource) {
+    const varType = getUnstableVarType(init);
+    for (const name of extractIdentifiersFromPattern(id)) {
+      unstableVars.set(name, {
+        name,
+        type: varType,
+        line,
+        isMemoized: false,
+        isModuleLevel: false,
+      });
+    }
+  }
+}
+
+/**
+ * Extract local variables that are potentially unstable (recreated on each render).
+ * This includes object literals, array literals, functions, and function call results
+ * that are defined inside a component but not wrapped in useMemo/useCallback/useRef.
+ */
+function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
+  const unstableVars = new Map<string, UnstableVariable>();
+  const memoizedVars = new Set<string>();
+  const stateVars = new Set<string>();
+  const refVars = new Set<string>();
+
+  // Track which function scopes we're in
+  let componentDepth = 0;
+  const moduleLevelVars = new Set<string>();
+
+  traverse(ast, {
+    // Track function component boundaries
+    FunctionDeclaration: {
+      enter(nodePath: NodePath<t.FunctionDeclaration>) {
+        // Check if this looks like a React component (PascalCase name)
+        const name = nodePath.node.id?.name;
+        if (name && /^[A-Z]/.test(name)) {
+          componentDepth++;
+        }
+      },
+      exit(nodePath: NodePath<t.FunctionDeclaration>) {
+        const name = nodePath.node.id?.name;
+        if (name && /^[A-Z]/.test(name)) {
+          componentDepth--;
+        }
+      },
+    },
+
+    // Track arrow function components assigned to variables
+    VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
+      const id = nodePath.node.id;
+      const init = nodePath.node.init;
+      const line = nodePath.node.loc?.start.line || 0;
+
+      // Handle array destructuring: const [a, b] = ... or const [a, [b, c]] = ...
+      if (t.isArrayPattern(id)) {
+        // Track array destructuring from useState/useReducer - these are stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          (init.callee.name === 'useState' || init.callee.name === 'useReducer')
+        ) {
+          // Use recursive extraction to handle all identifiers
+          for (const name of extractIdentifiersFromPattern(id)) {
+            stateVars.add(name);
+          }
+          return;
+        }
+
+        // Track custom hooks that follow the [state, setState] pattern
+        // These are treated as state-like even though the hook itself isn't guaranteed stable
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name.startsWith('use') &&
+          init.callee.name !== 'useState'
+        ) {
+          const elements = id.elements;
+          if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
+            const secondElement = elements[1].name;
+            // If second element looks like a setter (starts with 'set' + uppercase),
+            // treat this as a state pattern - the first element is managed state
+            if (
+              secondElement.startsWith('set') &&
+              secondElement.length > 3 &&
+              secondElement[3] === secondElement[3].toUpperCase()
+            ) {
+              for (const name of extractIdentifiersFromPattern(id)) {
+                stateVars.add(name);
+              }
+              return;
+            }
+          }
+        }
+
+        // Skip stable function calls (React hooks, parseInt, etc.)
+        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+          return;
+        }
+
+        // Inside component: destructuring from unstable source
+        if (componentDepth > 0) {
+          addUnstableDestructuredVariables(id, init, line, unstableVars);
+        }
+        return;
+      }
+
+      // Handle object destructuring: const { a, b } = ... or const { data: { user } } = ...
+      if (t.isObjectPattern(id)) {
+        // Track useContext patterns with state/setter pairs: const { data, setData } = useContext(...)
+        if (
+          t.isCallExpression(init) &&
+          t.isIdentifier(init.callee) &&
+          init.callee.name === 'useContext'
+        ) {
+          // Use extractIdentifiersFromPattern to handle all destructuring cases including nested
+          const extractedNames = extractIdentifiersFromPattern(id);
+
+          // Mark state variables (those with matching setters) as stable
+          for (const name of extractedNames) {
+            if (name.startsWith('set') && name.length > 3 && name[3] === name[3].toUpperCase()) {
+              const stateVar = name.charAt(3).toLowerCase() + name.slice(4);
+              if (extractedNames.includes(stateVar)) {
+                stateVars.add(stateVar);
+                stateVars.add(name); // setter is also stable
+              }
+            }
+          }
+          return;
+        }
+
+        // Skip stable function calls (React hooks, parseInt, etc.)
+        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+          return;
+        }
+
+        // Inside component: destructuring from unstable source
+        if (componentDepth > 0) {
+          addUnstableDestructuredVariables(id, init, line, unstableVars);
+        }
+        return;
+      }
+
+      // Simple identifier assignment: const x = ...
+      if (!t.isIdentifier(id)) return;
+      const varName = id.name;
+
+      // Check if this is a useState/useReducer call - track state variables
+      if (
+        t.isCallExpression(init) &&
+        t.isIdentifier(init.callee) &&
+        (init.callee.name === 'useState' || init.callee.name === 'useReducer')
+      ) {
+        stateVars.add(varName);
+        return;
+      }
+
+      // Check if this is a useRef call - refs are stable
+      if (
+        t.isCallExpression(init) &&
+        t.isIdentifier(init.callee) &&
+        init.callee.name === 'useRef'
+      ) {
+        refVars.add(varName);
+        return;
+      }
+
+      // Check if this is a useMemo/useCallback call - memoized values are stable
+      if (
+        t.isCallExpression(init) &&
+        t.isIdentifier(init.callee) &&
+        (init.callee.name === 'useMemo' || init.callee.name === 'useCallback')
+      ) {
+        memoizedVars.add(varName);
+        return;
+      }
+
+      // Track module-level variables (before any component function)
+      if (componentDepth === 0) {
+        moduleLevelVars.add(varName);
+        return;
+      }
+
+      // Now check for unstable patterns inside components
+      if (componentDepth > 0) {
+        // Object literal: const obj = { ... }
+        if (t.isObjectExpression(init)) {
+          unstableVars.set(varName, {
+            name: varName,
+            type: 'object',
+            line,
+            isMemoized: false,
+            isModuleLevel: false,
+          });
+        }
+        // Array literal: const arr = [...]
+        else if (t.isArrayExpression(init)) {
+          unstableVars.set(varName, {
+            name: varName,
+            type: 'array',
+            line,
+            isMemoized: false,
+            isModuleLevel: false,
+          });
+        }
+        // Arrow function: const fn = () => ...
+        else if (t.isArrowFunctionExpression(init)) {
+          unstableVars.set(varName, {
+            name: varName,
+            type: 'function',
+            line,
+            isMemoized: false,
+            isModuleLevel: false,
+          });
+        }
+        // Function expression: const fn = function() ...
+        else if (t.isFunctionExpression(init)) {
+          unstableVars.set(varName, {
+            name: varName,
+            type: 'function',
+            line,
+            isMemoized: false,
+            isModuleLevel: false,
+          });
+        }
+        // Function call that likely returns new object/array: const config = createConfig()
+        else if (t.isCallExpression(init)) {
+          // Skip stable function calls (React hooks, parseInt, etc.)
+          if (isStableFunctionCall(init)) {
+            return;
+          }
+          // Other function calls may return new objects
+          unstableVars.set(varName, {
+            name: varName,
+            type: 'function-call',
+            line,
+            isMemoized: false,
+            isModuleLevel: false,
+          });
+        }
+      }
+    },
+
+    // Track arrow function components
+    ArrowFunctionExpression: {
+      enter(nodePath: NodePath<t.ArrowFunctionExpression>) {
+        // Check if parent is a variable declarator with PascalCase name
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth++;
+        }
+      },
+      exit(nodePath: NodePath<t.ArrowFunctionExpression>) {
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth--;
+        }
+      },
+    },
+
+    // Track function expression components: const MyComponent = function() { ... }
+    FunctionExpression: {
+      enter(nodePath: NodePath<t.FunctionExpression>) {
+        // Check if parent is a variable declarator with PascalCase name
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth++;
+        }
+      },
+      exit(nodePath: NodePath<t.FunctionExpression>) {
+        const parent = nodePath.parent;
+        if (
+          t.isVariableDeclarator(parent) &&
+          t.isIdentifier(parent.id) &&
+          /^[A-Z]/.test(parent.id.name)
+        ) {
+          componentDepth--;
+        }
+      },
+    },
+  });
+
+  // Remove any variables that are actually memoized, state, refs, or module-level
+  for (const memoized of memoizedVars) {
+    unstableVars.delete(memoized);
+  }
+  for (const stateVar of stateVars) {
+    unstableVars.delete(stateVar);
+  }
+  for (const refVar of refVars) {
+    unstableVars.delete(refVar);
+  }
+  for (const moduleVar of moduleLevelVars) {
+    unstableVars.delete(moduleVar);
+  }
+
+  return unstableVars;
+}
+
+/**
+ * Check if a hook has unstable references in its dependency array.
+ * Returns an analysis if an issue is found, null otherwise.
+ */
+function checkUnstableReferences(
+  hookNode: HookNodeInfo,
+  unstableVars: Map<string, UnstableVariable>,
+  stateInfo: Map<string, string>,
+  filePath: string,
+  fileContent?: string
+): IntelligentHookAnalysis | null {
+  const { node, hookName, line } = hookNode;
+
+  // Check for ignore comments
+  if (fileContent && isHookIgnored(fileContent, line)) {
+    return null;
+  }
+
+  if (!node.arguments || node.arguments.length < 2) {
+    return null; // No dependencies array
+  }
+
+  // Get dependencies array
+  const depsArray = node.arguments[node.arguments.length - 1];
+  if (!t.isArrayExpression(depsArray)) {
+    return null;
+  }
+
+  // Check each dependency
+  for (const dep of depsArray.elements) {
+    if (!t.isIdentifier(dep)) continue;
+
+    const depName = dep.name;
+
+    // Skip if it's a state variable (managed by React, stable reference within render)
+    if (stateInfo.has(depName)) continue;
+
+    // Check if this dependency is an unstable variable
+    const unstableVar = unstableVars.get(depName);
+    if (unstableVar) {
+      const isUseEffect = hookName === 'useEffect' || hookName === 'useLayoutEffect';
+      const typeDescriptions: Record<string, string> = {
+        object: 'object literal',
+        array: 'array literal',
+        function: 'function',
+        'function-call': 'function call result',
+      };
+
+      return createAnalysis({
+        type: isUseEffect ? 'confirmed-infinite-loop' : 'potential-issue',
+        severity: isUseEffect ? 'high' : 'medium',
+        confidence: 'high',
+        hookType: hookName,
+        line,
+        file: filePath,
+        problematicDependency: depName,
+        stateVariable: undefined,
+        setterFunction: undefined,
+        actualStateModifications: [],
+        stateReads: [],
+        explanation: isUseEffect
+          ? `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
+            `It gets a new reference on every render, causing this ${hookName} to run infinitely. ` +
+            `Fix: wrap with useMemo/useCallback, move outside the component, or remove from dependencies.`
+          : `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
+            `It gets a new reference on every render, causing unnecessary ${hookName} re-creation. ` +
+            `Fix: wrap with useMemo/useCallback or move outside the component.`,
+      });
+    }
+  }
+
+  return null;
 }
 
 function findHookNodes(ast: t.Node): HookNodeInfo[] {
