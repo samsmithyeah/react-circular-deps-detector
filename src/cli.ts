@@ -241,7 +241,7 @@ function generateSarifReport(results: DetectionResults): SarifReport {
           driver: {
             name: 'react-loop-detector',
             version: '1.0.0',
-            informationUri: 'https://github.com/samsmithyeah/react-circular-deps-detector',
+            informationUri: 'https://github.com/samsmithyeah/react-loop-detector',
             rules,
           },
         },

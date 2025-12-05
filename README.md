@@ -185,7 +185,7 @@ const functionB = useCallback(() => {
 
 Create a config file in your project root. Supported formats:
 
-- `rld.config.js` / `rld.config.mjs`
+- `rld.config.js` (CommonJS)
 - `rld.config.json`
 - `.rldrc` / `.rldrc.json`
 

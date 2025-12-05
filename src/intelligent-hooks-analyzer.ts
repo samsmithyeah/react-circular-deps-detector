@@ -687,7 +687,15 @@ export interface AnalyzerOptions {
   debug?: boolean;
 }
 
-// Store options at module level so helper functions can access them
+/**
+ * Module-level options storage for helper functions.
+ *
+ * Note: This is intentional - the analyzer runs synchronously in a single thread,
+ * and options are reset at the start of each analyzeHooksIntelligently() call.
+ * While passing options through the call chain would be more pure, the current
+ * approach avoids threading options through 10+ function calls for a simple
+ * config lookup. The tradeoff is acceptable since the analyzer is not concurrent.
+ */
 let currentOptions: AnalyzerOptions = {};
 
 export function analyzeHooksIntelligently(

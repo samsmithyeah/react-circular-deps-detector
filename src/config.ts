@@ -56,13 +56,7 @@ export interface RcdConfig {
   >;
 }
 
-const CONFIG_FILES = [
-  'rld.config.js',
-  'rld.config.mjs',
-  'rld.config.json',
-  '.rldrc',
-  '.rldrc.json',
-];
+const CONFIG_FILES = ['rld.config.js', 'rld.config.json', '.rldrc', '.rldrc.json'];
 
 /**
  * Default configuration
@@ -129,10 +123,19 @@ function loadConfigFile(configPath: string): RcdConfig {
     return JSON.parse(content);
   }
 
-  if (ext === '.js' || ext === '.mjs') {
-    // For JS config files, use require (CommonJS) or dynamic import (ESM)
+  if (ext === '.js') {
+    // For CommonJS config files, use require
+
     const config = require(configPath);
     return config.default || config;
+  }
+
+  if (ext === '.mjs') {
+    // ESM modules cannot be loaded synchronously with require()
+    // Users should use .js (CommonJS) or .json config files
+    throw new Error(
+      `ESM config files (.mjs) are not supported. Please use rld.config.js (CommonJS) or rld.config.json instead.`
+    );
   }
 
   throw new Error(`Unsupported config file format: ${ext}`);
