@@ -1672,23 +1672,49 @@ function hasUnconditionalSetState(effectBody: t.Node, stateInfo: Map<string, str
         }
       }
 
-      // Check for async patterns - increment depth for their callbacks
-      const isAsyncCallback =
-        (t.isIdentifier(callee) &&
-          ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name)) ||
-        (t.isMemberExpression(callee) &&
-          t.isIdentifier(callee.property) &&
-          ['then', 'catch', 'finally'].includes(callee.property.name));
+      // Check for truly deferred patterns (setTimeout, setInterval, etc.)
+      // These callbacks might never run (could be cleared), so treat as conditional
+      const isTrulyDeferredCallback =
+        t.isIdentifier(callee) &&
+        ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name);
 
-      if (isAsyncCallback) {
-        // Walk arguments with increased depth (callbacks inside are deferred)
+      if (isTrulyDeferredCallback) {
+        // Walk arguments with increased depth (callbacks inside are truly deferred)
         for (const arg of node.arguments) {
           if (t.isExpression(arg) || t.isSpreadElement(arg)) {
             walk(arg, conditionalDepth + 1);
           }
         }
-        // Walk the callee too (for chained .then().catch())
-        walk(callee, conditionalDepth);
+        return;
+      }
+
+      // Check for promise .then()/.catch()/.finally() - these are NOT truly conditional
+      // If the promise is called unconditionally and resolves, the .then() WILL run
+      // This is important for detecting infinite loops like:
+      //   fetchData().then(result => setState(result))
+      // where setState is called unconditionally when the promise resolves
+      const isPromiseCallback =
+        t.isMemberExpression(callee) &&
+        t.isIdentifier(callee.property) &&
+        ['then', 'catch', 'finally'].includes(callee.property.name);
+
+      if (isPromiseCallback) {
+        // Walk the promise chain (the callee object) at current depth
+        walk(callee.object, conditionalDepth);
+        // For promise callbacks, we need to walk INTO the function body
+        // (unlike regular nested functions which aren't executed immediately)
+        // because the callback WILL be executed when the promise resolves
+        for (const arg of node.arguments) {
+          if (t.isArrowFunctionExpression(arg)) {
+            // Walk into the arrow function body at current conditional depth
+            walk(arg.body, conditionalDepth);
+          } else if (t.isFunctionExpression(arg)) {
+            // Walk into the function expression body at current conditional depth
+            walk(arg.body, conditionalDepth);
+          } else if (t.isExpression(arg) || t.isSpreadElement(arg)) {
+            walk(arg, conditionalDepth);
+          }
+        }
         return;
       }
 
