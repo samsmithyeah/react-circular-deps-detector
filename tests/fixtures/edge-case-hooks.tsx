@@ -1,10 +1,15 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 
+interface DataType {
+  count?: number;
+  [key: string]: unknown;
+}
+
 // Test edge cases for hooks dependency analysis
 export const EdgeCaseHooksExample: React.FC = () => {
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DataType | null>(null);
 
   // Edge case 1: useState without array destructuring (should not crash)
   const state = useState(0);

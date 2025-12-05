@@ -8,18 +8,19 @@ import { processData, validateInput } from './utils';
 export const MyComponent: React.FC = () => {
   const { updateData } = useMyContext();
 
-  const handleSubmit = useCallback((data: any) => {
-    if (validateInput(data)) {
-      const processed = processData(data);
-      updateData(processed);
-    }
-  }, [updateData]);
+  const handleSubmit = useCallback(
+    (data: Record<string, unknown>) => {
+      if (validateInput(data)) {
+        const processed = processData(data);
+        updateData(processed);
+      }
+    },
+    [updateData]
+  );
 
   return (
     <div>
-      <button onClick={() => handleSubmit({ test: true })}>
-        Submit
-      </button>
+      <button onClick={() => handleSubmit({ test: true })}>Submit</button>
     </div>
   );
 };

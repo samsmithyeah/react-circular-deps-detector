@@ -25,7 +25,6 @@ function createTestFile(content: string): ParsedFile {
 }
 
 describe('Real-World False Positives from GoingOutApp', () => {
-
   describe('OutgoingSignalCard.tsx - setInterval pattern', () => {
     it('should NOT flag setCurrentTime inside setInterval as infinite loop', () => {
       // This pattern was incorrectly flagged as "CONFIRMED infinite loop"
@@ -71,7 +70,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setCurrentTime is inside setInterval (deferred)
       expect(infiniteLoops).toHaveLength(0);
@@ -142,7 +141,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setCrewsCache/setUsersCache are inside onSnapshot (deferred)
       expect(infiniteLoops).toHaveLength(0);
@@ -209,7 +208,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setAllContacts is inside onSnapshot with functional updater
       expect(infiniteLoops).toHaveLength(0);
@@ -267,7 +266,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // None should be flagged as infinite loops - all are deferred
       expect(infiniteLoops).toHaveLength(0);
@@ -292,7 +291,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // SHOULD be flagged - direct modification in useEffect
       expect(infiniteLoops.length).toBeGreaterThan(0);
@@ -324,11 +323,11 @@ describe('Real-World False Positives from GoingOutApp', () => {
       `);
 
       const results = analyzeHooksIntelligently([parsed]);
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // SHOULD flag the direct setCount call
       expect(infiniteLoops.length).toBeGreaterThan(0);
-      expect(infiniteLoops.some(r => r.problematicDependency === 'count')).toBe(true);
+      expect(infiniteLoops.some((r) => r.problematicDependency === 'count')).toBe(true);
     });
   });
 });

@@ -1,5 +1,4 @@
 import * as t from '@babel/types';
-import * as path from 'path';
 import { ParsedFile } from './parser';
 
 export interface FunctionDefinition {
@@ -33,42 +32,42 @@ export interface CrossFileAnalysis {
 export function analyzeCrossFileRelations(parsedFiles: ParsedFile[]): CrossFileAnalysis {
   const functions = new Map<string, FunctionDefinition>();
   const calls: FunctionCall[] = [];
-  
+
   // Phase 1: Extract all function definitions and calls
   for (const file of parsedFiles) {
     try {
       const { fileFunctions, fileCalls } = extractFileAnalysis(file);
-      
+
       // Store function definitions
-      fileFunctions.forEach(func => {
+      fileFunctions.forEach((func) => {
         const key = `${func.name}@${func.file}`;
         functions.set(key, func);
-        
+
         // Also store by name only for exported functions
         if (func.isExported) {
           functions.set(func.name, func);
         }
       });
-      
+
       calls.push(...fileCalls);
     } catch (error) {
       console.warn(`Could not analyze ${file.file} for cross-file relations:`, error);
     }
   }
-  
+
   // Phase 2: Build function call graph and trace state modifications
   const stateSetterFlows = traceFunctionCallFlows(functions, calls);
-  
+
   return {
     functions,
     calls,
-    stateSetterFlows
+    stateSetterFlows,
   };
 }
 
 function extractFileAnalysis(file: ParsedFile): {
-  fileFunctions: FunctionDefinition[],
-  fileCalls: FunctionCall[]
+  fileFunctions: FunctionDefinition[];
+  fileCalls: FunctionCall[];
 } {
   const fileFunctions: FunctionDefinition[] = [];
   const fileCalls: FunctionCall[] = [];
@@ -87,7 +86,6 @@ function extractFileAnalysis(file: ParsedFile): {
     // Find all function calls, especially those in hooks
     const functionCalls = findFunctionCalls(ast, file.file, stateSetters);
     fileCalls.push(...functionCalls);
-
   } catch (error) {
     console.warn(`Could not parse ${file.file} for cross-file analysis:`, error);
   }
@@ -95,24 +93,35 @@ function extractFileAnalysis(file: ParsedFile): {
   return { fileFunctions, fileCalls };
 }
 
+// Type for indexable AST nodes for traversal
+type IndexableNode = Record<string, unknown>;
+
 function extractStateSetters(ast: t.Node): Map<string, string> {
   const stateSetters = new Map<string, string>(); // setter -> state variable
-  
-  function visitNode(node: any): void {
+
+  function visitNode(node: t.Node | null | undefined): void {
     if (!node || typeof node !== 'object') return;
 
     // Extract useState patterns: const [state, setState] = useState(...)
-    if (node.type === 'VariableDeclarator' &&
-        node.id && node.id.type === 'ArrayPattern' &&
-        node.init && node.init.type === 'CallExpression' &&
-        node.init.callee && node.init.callee.type === 'Identifier' &&
-        node.init.callee.name === 'useState') {
-      
+    if (
+      node.type === 'VariableDeclarator' &&
+      node.id &&
+      node.id.type === 'ArrayPattern' &&
+      node.init &&
+      node.init.type === 'CallExpression' &&
+      node.init.callee &&
+      node.init.callee.type === 'Identifier' &&
+      node.init.callee.name === 'useState'
+    ) {
       const elements = node.id.elements;
-      if (elements && elements.length >= 2 && 
-          elements[0] && elements[0].type === 'Identifier' &&
-          elements[1] && elements[1].type === 'Identifier') {
-        
+      if (
+        elements &&
+        elements.length >= 2 &&
+        elements[0] &&
+        elements[0].type === 'Identifier' &&
+        elements[1] &&
+        elements[1].type === 'Identifier'
+      ) {
         const stateVar = elements[0].name;
         const setter = elements[1].name;
         stateSetters.set(setter, stateVar);
@@ -120,12 +129,13 @@ function extractStateSetters(ast: t.Node): Map<string, string> {
     }
 
     // Recursively visit all properties
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableNode = node as unknown as IndexableNode;
+    Object.keys(node).forEach((key) => {
+      const value = indexableNode[key];
       if (Array.isArray(value)) {
-        value.forEach(visitNode);
-      } else if (value && typeof value === 'object' && value.type) {
-        visitNode(value);
+        value.forEach((child) => visitNode(child as t.Node | null | undefined));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        visitNode(value as t.Node);
       }
     });
   }
@@ -135,13 +145,13 @@ function extractStateSetters(ast: t.Node): Map<string, string> {
 }
 
 function findFunctionDefinitions(
-  ast: t.Node, 
-  fileName: string, 
+  ast: t.Node,
+  fileName: string,
   stateSetters: Map<string, string>
 ): FunctionDefinition[] {
   const functions: FunctionDefinition[] = [];
-  
-  function visitNode(node: any, parent?: any): void {
+
+  function visitNode(node: t.Node | null | undefined, parent?: t.Node | null): void {
     if (!node || typeof node !== 'object') return;
 
     // Function declarations: function myFunc() {}
@@ -149,30 +159,36 @@ function findFunctionDefinitions(
       const func = analyzeFunctionNode(node, fileName, stateSetters, parent);
       if (func) functions.push(func);
     }
-    
+
     // Arrow functions in variable declarations: const myFunc = () => {}
-    if (node.type === 'VariableDeclarator' && 
-        node.id && node.id.type === 'Identifier' &&
-        node.init && (node.init.type === 'ArrowFunctionExpression' || node.init.type === 'FunctionExpression')) {
+    if (
+      node.type === 'VariableDeclarator' &&
+      node.id &&
+      node.id.type === 'Identifier' &&
+      node.init &&
+      (node.init.type === 'ArrowFunctionExpression' || node.init.type === 'FunctionExpression')
+    ) {
       const func = analyzeFunctionNode(node.init, fileName, stateSetters, parent, node.id.name);
       if (func) functions.push(func);
     }
-    
+
     // Method definitions in objects/classes
-    if (node.type === 'Property' && 
-        node.key && node.key.type === 'Identifier' &&
-        node.value && (node.value.type === 'FunctionExpression' || node.value.type === 'ArrowFunctionExpression')) {
-      const func = analyzeFunctionNode(node.value, fileName, stateSetters, parent, node.key.name);
-      if (func) functions.push(func);
+    if (t.isObjectProperty(node) && t.isIdentifier(node.key) && t.isExpression(node.value)) {
+      const value = node.value;
+      if (t.isArrowFunctionExpression(value) || t.isFunctionExpression(value)) {
+        const func = analyzeFunctionNode(value, fileName, stateSetters, parent, node.key.name);
+        if (func) functions.push(func);
+      }
     }
 
     // Recursively visit all properties
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableNode = node as unknown as IndexableNode;
+    Object.keys(node).forEach((key) => {
+      const value = indexableNode[key];
       if (Array.isArray(value)) {
-        value.forEach(child => visitNode(child, node));
-      } else if (value && typeof value === 'object' && value.type) {
-        visitNode(value, node);
+        value.forEach((child) => visitNode(child as t.Node | null | undefined, node));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        visitNode(value as t.Node, node);
       }
     });
   }
@@ -182,40 +198,45 @@ function findFunctionDefinitions(
 }
 
 function analyzeFunctionNode(
-  node: any, 
-  fileName: string, 
-  stateSetters: Map<string, string>, 
-  parent?: any,
+  node: t.FunctionDeclaration | t.ArrowFunctionExpression | t.FunctionExpression,
+  fileName: string,
+  stateSetters: Map<string, string>,
+  parent?: t.Node | null,
   nameOverride?: string
 ): FunctionDefinition | null {
-  const name = nameOverride || (node.id && node.id.name) || 'anonymous';
+  // FunctionDeclaration has id, ArrowFunctionExpression and FunctionExpression may not
+  const nodeId = 'id' in node && node.id ? node.id.name : undefined;
+  const name = nameOverride || nodeId || 'anonymous';
   const line = node.loc?.start.line || 0;
-  
+
   // Extract parameters
   const parameters: string[] = [];
   const setterLikeParams: string[] = [];
   if (node.params) {
-    node.params.forEach((param: any) => {
-      if (param.type === 'Identifier') {
+    node.params.forEach((param) => {
+      if (t.isIdentifier(param)) {
         parameters.push(param.name);
         // Detect setter-like parameters (functions that start with 'set' and have camelCase)
-        if (param.name.startsWith('set') && param.name.length > 3 && 
-            param.name[3] === param.name[3].toUpperCase()) {
+        if (
+          param.name.startsWith('set') &&
+          param.name.length > 3 &&
+          param.name[3] === param.name[3].toUpperCase()
+        ) {
           setterLikeParams.push(param.name);
         }
       }
     });
   }
-  
+
   // Check if function is exported
   const isExported = isNodeExported(parent);
-  
+
   // Check if function is async
   const isAsync = node.async || false;
-  
+
   // Analyze what this function calls
   const analysis = analyzeFunctionBody(node.body || node, stateSetters, setterLikeParams);
-  
+
   return {
     name,
     file: fileName,
@@ -224,26 +245,30 @@ function analyzeFunctionNode(
     callsStateSetters: analysis.callsStateSetters,
     callsFunctions: analysis.callsFunctions,
     isExported,
-    isAsync
+    isAsync,
   };
 }
 
-function analyzeFunctionBody(body: any, stateSetters: Map<string, string>, parameters: string[] = []): {
-  callsStateSetters: string[],
-  callsFunctions: string[]
+function analyzeFunctionBody(
+  body: t.BlockStatement | t.Expression | null | undefined,
+  stateSetters: Map<string, string>,
+  parameters: string[] = []
+): {
+  callsStateSetters: string[];
+  callsFunctions: string[];
 } {
   const callsStateSetters: string[] = [];
   const callsFunctions: string[] = [];
   const setterNames = Array.from(stateSetters.keys());
-  
-  function visitNode(node: any): void {
+
+  function visitNode(node: t.Node | null | undefined): void {
     if (!node || typeof node !== 'object') return;
 
     // Look for function calls
     if (node.type === 'CallExpression' && node.callee) {
       if (node.callee.type === 'Identifier') {
         const funcName = node.callee.name;
-        
+
         // Check if it's a state setter (either from useState or passed as parameter)
         if (setterNames.includes(funcName) || parameters.includes(funcName)) {
           callsStateSetters.push(funcName);
@@ -254,55 +279,62 @@ function analyzeFunctionBody(body: any, stateSetters: Map<string, string>, param
     }
 
     // Recursively visit all properties
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableNode = node as unknown as IndexableNode;
+    Object.keys(node).forEach((key) => {
+      const value = indexableNode[key];
       if (Array.isArray(value)) {
-        value.forEach(visitNode);
-      } else if (value && typeof value === 'object' && value.type) {
-        visitNode(value);
+        value.forEach((child) => visitNode(child as t.Node | null | undefined));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        visitNode(value as t.Node);
       }
     });
   }
 
   visitNode(body);
-  
+
   return {
     callsStateSetters: [...new Set(callsStateSetters)],
-    callsFunctions: [...new Set(callsFunctions)]
+    callsFunctions: [...new Set(callsFunctions)],
   };
 }
 
 function findFunctionCalls(
-  ast: t.Node, 
-  fileName: string, 
+  ast: t.Node,
+  fileName: string,
   stateSetters: Map<string, string>
 ): FunctionCall[] {
   const calls: FunctionCall[] = [];
   const setterNames = Array.from(stateSetters.keys());
-  
-  function visitNode(node: any, context?: { inHook?: boolean, hookType?: string, hookStartLine?: number }): void {
+
+  function visitNode(
+    node: t.Node | null | undefined,
+    context?: { inHook?: boolean; hookType?: string; hookStartLine?: number }
+  ): void {
     if (!node || typeof node !== 'object') return;
 
     // Track when we're inside a hook
     let currentContext = context || {};
-    
+
     if (node.type === 'CallExpression' && node.callee && node.callee.type === 'Identifier') {
       const calleeName = node.callee.name;
-      
+
       // Check if this is a hook call
       if (['useEffect', 'useCallback', 'useMemo', 'useLayoutEffect'].includes(calleeName)) {
-        currentContext = { 
-          inHook: true, 
+        currentContext = {
+          inHook: true,
           hookType: calleeName,
-          hookStartLine: node.loc?.start.line || 0
+          hookStartLine: node.loc?.start.line || 0,
         };
       }
-      
+
       // Record function calls, especially those in hooks
-      if (currentContext.inHook && !['useEffect', 'useCallback', 'useMemo', 'useLayoutEffect'].includes(calleeName)) {
+      if (
+        currentContext.inHook &&
+        !['useEffect', 'useCallback', 'useMemo', 'useLayoutEffect'].includes(calleeName)
+      ) {
         const args = extractArgumentNames(node.arguments);
-        const passesStateSetters = args.filter(arg => setterNames.includes(arg));
-        
+        const passesStateSetters = args.filter((arg) => setterNames.includes(arg));
+
         calls.push({
           functionName: calleeName,
           file: fileName,
@@ -311,18 +343,19 @@ function findFunctionCalls(
           inHookBody: true,
           hookType: currentContext.hookType,
           passesStateSetters,
-          hookStartLine: currentContext.hookStartLine // Add hook start line for consistency
+          hookStartLine: currentContext.hookStartLine, // Add hook start line for consistency
         });
       }
     }
 
     // Recursively visit all properties with context
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableNode = node as unknown as IndexableNode;
+    Object.keys(node).forEach((key) => {
+      const value = indexableNode[key];
       if (Array.isArray(value)) {
-        value.forEach(child => visitNode(child, currentContext));
-      } else if (value && typeof value === 'object' && value.type) {
-        visitNode(value, currentContext);
+        value.forEach((child) => visitNode(child as t.Node | null | undefined, currentContext));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        visitNode(value as t.Node, currentContext);
       }
     });
   }
@@ -331,26 +364,50 @@ function findFunctionCalls(
   return calls;
 }
 
-function extractArgumentNames(args: any[]): string[] {
-  return args.map(arg => {
-    if (arg.type === 'Identifier') {
-      return arg.name;
-    } else if (arg.type === 'MemberExpression') {
-      return `${arg.object.name}.${arg.property.name}`;
-    } else {
-      return 'unknown';
-    }
-  }).filter(name => name !== 'unknown');
+function extractArgumentNames(
+  args: Array<t.Expression | t.SpreadElement | t.ArgumentPlaceholder>
+): string[] {
+  return args
+    .map((arg) => {
+      if (t.isIdentifier(arg)) {
+        return arg.name;
+      } else if (
+        t.isMemberExpression(arg) &&
+        t.isIdentifier(arg.object) &&
+        t.isIdentifier(arg.property)
+      ) {
+        return `${arg.object.name}.${arg.property.name}`;
+      } else {
+        return 'unknown';
+      }
+    })
+    .filter((name) => name !== 'unknown');
 }
 
-function isNodeExported(parent?: any): boolean {
+interface NodeWithParent {
+  type: string;
+  parent?: NodeWithParent;
+}
+
+function isNodeExported(parent?: t.Node | null): boolean {
   if (!parent) return false;
-  
+
   // Check various export patterns
-  return parent.type === 'ExportNamedDeclaration' ||
-         parent.type === 'ExportDefaultDeclaration' ||
-         (parent.type === 'VariableDeclaration' && parent.parent && 
-          (parent.parent.type === 'ExportNamedDeclaration' || parent.parent.type === 'ExportDefaultDeclaration'));
+  if (parent.type === 'ExportNamedDeclaration' || parent.type === 'ExportDefaultDeclaration') {
+    return true;
+  }
+
+  if (parent.type === 'VariableDeclaration') {
+    const parentWithParent = parent as unknown as NodeWithParent;
+    if (
+      parentWithParent.parent?.type === 'ExportNamedDeclaration' ||
+      parentWithParent.parent?.type === 'ExportDefaultDeclaration'
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function traceFunctionCallFlows(
@@ -358,17 +415,17 @@ function traceFunctionCallFlows(
   calls: FunctionCall[]
 ): Map<string, string[]> {
   const flows = new Map<string, string[]>();
-  
+
   // For each hook call that passes state setters to functions
-  calls.forEach(call => {
+  calls.forEach((call) => {
     if (call.inHookBody && call.passesStateSetters.length > 0) {
       // Use hook start line for consistent hookId matching with intelligent analyzer
       const hookLine = call.hookStartLine || call.line;
       const hookId = `${call.file}:${hookLine}:${call.hookType}`;
-      
+
       // Trace what this function call eventually does
       const modifiedSetters = traceFunctionModifications(call.functionName, functions, new Set());
-      
+
       if (modifiedSetters.length > 0) {
         flows.set(hookId, modifiedSetters);
       }
@@ -387,10 +444,10 @@ function traceFunctionModifications(
     return [];
   }
   visited.add(functionName);
-  
+
   // Try to find function by name only (for exported functions)
   let func = functions.get(functionName);
-  
+
   // If not found by name only, try finding by file@name pattern
   if (!func) {
     for (const [key, definition] of functions.entries()) {
@@ -400,21 +457,21 @@ function traceFunctionModifications(
       }
     }
   }
-  
+
   if (!func) {
     return []; // Function not found in our analysis
   }
-  
+
   const modifications: string[] = [];
-  
+
   // Direct state modifications
   modifications.push(...func.callsStateSetters);
-  
+
   // Indirect modifications through other function calls
-  func.callsFunctions.forEach(calledFunc => {
+  func.callsFunctions.forEach((calledFunc) => {
     const indirectMods = traceFunctionModifications(calledFunc, functions, new Set(visited));
     modifications.push(...indirectMods);
   });
-  
+
   return [...new Set(modifications)]; // Remove duplicates
 }

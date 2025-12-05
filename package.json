@@ -14,7 +14,13 @@
     "prepublishOnly": "npm run build",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "knip": "knip",
+    "knip:fix": "knip --fix"
   },
   "keywords": [
     "react",
@@ -44,13 +50,20 @@
     "@babel/parser": "^7.27.5",
     "@babel/traverse": "^7.27.4",
     "@babel/types": "^7.27.6",
+    "@eslint/js": "^9.39.1",
     "@types/babel__traverse": "^7.20.7",
     "@types/jest": "^30.0.0",
     "@types/micromatch": "^4.0.10",
     "@types/node": "^24.0.3",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
     "jest": "^30.0.1",
+    "knip": "^5.71.0",
+    "prettier": "^3.7.4",
     "ts-jest": "^29.4.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.48.1"
   },
   "dependencies": {
     "chalk": "^4.1.2",

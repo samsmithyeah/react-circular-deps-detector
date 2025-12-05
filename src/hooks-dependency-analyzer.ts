@@ -75,7 +75,7 @@ export class HooksDependencyAnalyzer {
     const stateSetters: StateSetter[] = [];
     const functionCalls: FunctionCall[] = [];
     let currentFunction: string | null = null;
-    
+
     // Bind methods to preserve 'this' context
     const extractStateVariableFromSetter = this.extractStateVariableFromSetter.bind(this);
     const isBuiltinFunction = this.isBuiltinFunction.bind(this);
@@ -87,21 +87,22 @@ export class HooksDependencyAnalyzer {
           currentFunction = path.node.id.name;
         }
       },
-      
+
       VariableDeclarator(path: NodePath<t.VariableDeclarator>) {
         // Track useState declarations to find state setters
         if (t.isIdentifier(path.node.id) || t.isArrayPattern(path.node.id)) {
-          if (t.isCallExpression(path.node.init) && 
-              t.isIdentifier(path.node.init.callee) && 
-              path.node.init.callee.name === 'useState') {
-            
+          if (
+            t.isCallExpression(path.node.init) &&
+            t.isIdentifier(path.node.init.callee) &&
+            path.node.init.callee.name === 'useState'
+          ) {
             if (t.isArrayPattern(path.node.id) && path.node.id.elements.length >= 2) {
               const setter = path.node.id.elements[1];
               if (t.isIdentifier(setter)) {
                 // Extract state variable name from setter (e.g., setIsLoading -> isLoading)
                 const setterName = setter.name;
                 const stateVar = extractStateVariableFromSetter(setterName);
-                
+
                 stateSetters.push({
                   name: setterName,
                   stateVariable: stateVar,
@@ -115,9 +116,11 @@ export class HooksDependencyAnalyzer {
 
         // Track function assignments (const funcName = useCallback(...))
         if (t.isIdentifier(path.node.id) && t.isCallExpression(path.node.init)) {
-          if (t.isIdentifier(path.node.init.callee) && 
-              (path.node.init.callee.name === 'useCallback' || 
-               path.node.init.callee.name === 'useMemo')) {
+          if (
+            t.isIdentifier(path.node.init.callee) &&
+            (path.node.init.callee.name === 'useCallback' ||
+              path.node.init.callee.name === 'useMemo')
+          ) {
             currentFunction = path.node.id.name;
           }
         }
@@ -127,7 +130,7 @@ export class HooksDependencyAnalyzer {
       CallExpression(path: NodePath<t.CallExpression>) {
         if (currentFunction && t.isIdentifier(path.node.callee)) {
           const calleeName = path.node.callee.name;
-          
+
           // Track state setter calls
           if (calleeName.startsWith('set') && calleeName.length > 3) {
             const stateVar = extractStateVariableFromSetter(calleeName);
@@ -155,8 +158,8 @@ export class HooksDependencyAnalyzer {
       'FunctionDeclaration|ArrowFunctionExpression|FunctionExpression': {
         exit() {
           currentFunction = null;
-        }
-      }
+        },
+      },
     });
 
     this.stateSetters.set(filePath, stateSetters);
@@ -174,17 +177,34 @@ export class HooksDependencyAnalyzer {
 
   private isBuiltinFunction(name: string): boolean {
     const builtins = [
-      'console', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
-      'Promise', 'Date', 'Math', 'Object', 'Array', 'JSON', 'parseInt', 'parseFloat',
-      'useState', 'useEffect', 'useCallback', 'useMemo', 'useRef', 'useContext',
-      'useReducer', 'useLayoutEffect'
+      'console',
+      'setTimeout',
+      'clearTimeout',
+      'setInterval',
+      'clearInterval',
+      'Promise',
+      'Date',
+      'Math',
+      'Object',
+      'Array',
+      'JSON',
+      'parseInt',
+      'parseFloat',
+      'useState',
+      'useEffect',
+      'useCallback',
+      'useMemo',
+      'useRef',
+      'useContext',
+      'useReducer',
+      'useLayoutEffect',
     ];
     return builtins.includes(name);
   }
 
   private detectDependencyLoops(): HooksDependencyLoop[] {
     const loops: HooksDependencyLoop[] = [];
-    
+
     // For each hook, check if it creates a dependency loop
     for (const [filePath, hooks] of this.hooks) {
       for (const hook of hooks) {
@@ -216,9 +236,9 @@ export class HooksDependencyAnalyzer {
 
   private checkStateModificationLoops(hook: HookInfo, filePath: string): HooksDependencyLoop[] {
     const loops: HooksDependencyLoop[] = [];
-    
+
     // Get the function name for this hook
-    const functionName = this.getFunctionNameForHook(hook, filePath);
+    const functionName = this.getFunctionNameForHook();
     if (!functionName) return loops;
 
     // Check if this function modifies any state it depends on
@@ -252,8 +272,8 @@ export class HooksDependencyAnalyzer {
           loops.push({
             type: 'useEffect-useCallback',
             description: `useEffect depends on function '${dep}' which creates state modification loops, causing infinite effect re-runs`,
-            functions: [dep, ...functionLoops.flatMap(l => l.functions)],
-            stateVariables: functionLoops.flatMap(l => l.stateVariables),
+            functions: [dep, ...functionLoops.flatMap((l) => l.functions)],
+            stateVariables: functionLoops.flatMap((l) => l.stateVariables),
             files: [filePath],
             severity: 'high',
           });
@@ -264,21 +284,25 @@ export class HooksDependencyAnalyzer {
     return loops;
   }
 
-  private getFunctionNameForHook(hook: HookInfo, filePath: string): string | null {
+  private getFunctionNameForHook(): string | null {
     // This is a simplified approach - in practice, we'd need more sophisticated AST analysis
     // to map hooks to their function names
     return null; // TODO: Implement proper hook-to-function mapping
   }
 
-  private doesFunctionModifyState(functionName: string, stateName: string, filePath: string): boolean {
+  private doesFunctionModifyState(
+    functionName: string,
+    stateName: string,
+    filePath: string
+  ): boolean {
     const setterName = 'set' + stateName.charAt(0).toUpperCase() + stateName.slice(1);
-    
+
     // Check direct calls to state setter
     const calls = this.functionCalls.get(filePath) || [];
-    const directCall = calls.some(call => 
-      call.caller === functionName && call.callee === setterName
+    const directCall = calls.some(
+      (call) => call.caller === functionName && call.callee === setterName
     );
-    
+
     if (directCall) return true;
 
     // Check indirect calls through other functions
@@ -286,21 +310,21 @@ export class HooksDependencyAnalyzer {
   }
 
   private doesFunctionIndirectlyModifyState(
-    functionName: string, 
-    setterName: string, 
-    filePath: string, 
+    functionName: string,
+    setterName: string,
+    filePath: string,
     visited: Set<string>
   ): boolean {
     if (visited.has(functionName)) return false;
     visited.add(functionName);
 
     const calls = this.functionCalls.get(filePath) || [];
-    const functionCalls = calls.filter(call => call.caller === functionName);
+    const functionCalls = calls.filter((call) => call.caller === functionName);
 
     for (const call of functionCalls) {
       // Direct call to setter
       if (call.callee === setterName) return true;
-      
+
       // Recursive check
       if (this.doesFunctionIndirectlyModifyState(call.callee, setterName, filePath, visited)) {
         return true;
@@ -313,19 +337,24 @@ export class HooksDependencyAnalyzer {
   private isFunctionDependency(depName: string, filePath: string): boolean {
     // Check if this dependency name corresponds to a function (useCallback/useMemo)
     const hooks = this.hooks.get(filePath) || [];
-    return hooks.some(hook => 
-      (hook.name === 'useCallback' || hook.name === 'useMemo') && 
-      hook.dependencies.includes(depName)
+    return hooks.some(
+      (hook) =>
+        (hook.name === 'useCallback' || hook.name === 'useMemo') &&
+        hook.dependencies.includes(depName)
     );
   }
 
-  private checkFunctionForIndirectStateLoops(functionName: string, filePath: string): HooksDependencyLoop[] {
+  private checkFunctionForIndirectStateLoops(
+    functionName: string,
+    filePath: string
+  ): HooksDependencyLoop[] {
     // Simplified implementation - check if function modifies state it depends on
     const hooks = this.hooks.get(filePath) || [];
-    const functionHook = hooks.find(hook => 
-      (hook.name === 'useCallback' || hook.name === 'useMemo') &&
-      // TODO: Map hook to function name properly
-      false
+    const functionHook = hooks.find(
+      (hook) =>
+        (hook.name === 'useCallback' || hook.name === 'useMemo') &&
+        // TODO: Map hook to function name properly
+        false
     );
 
     if (functionHook) {

@@ -8,12 +8,12 @@ describe('Hooks Integration Tests', () => {
     it('should detect hooks dependency loops in integration', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'hooks-dependency-loop.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(results).toHaveProperty('improvedHooksLoops');
       expect(results.improvedHooksLoops.length).toBeGreaterThan(0);
-      
+
       expect(results.summary.improvedHooksLoops).toBeGreaterThan(0);
       expect(results.summary.filesAnalyzed).toBe(1);
     });
@@ -21,18 +21,18 @@ describe('Hooks Integration Tests', () => {
     it('should have fewer issues in clean hooks file', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'clean-hooks-example.tsx',
-        ignore: []
+        ignore: [],
       });
 
       // Clean hooks should have fewer high-severity issues
-      const highSeverityIssues = results.improvedHooksLoops.filter(l => l.severity === 'high');
+      const highSeverityIssues = results.improvedHooksLoops.filter((l) => l.severity === 'high');
       expect(highSeverityIssues.length).toBeLessThanOrEqual(1);
     });
 
     it('should handle edge cases without crashing', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'edge-case-hooks.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(results).toHaveProperty('improvedHooksLoops');
@@ -42,14 +42,14 @@ describe('Hooks Integration Tests', () => {
     it('should include hooks loops in total issue count', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'hooks-dependency-loop.tsx',
-        ignore: []
+        ignore: [],
       });
 
-      const totalExpected = 
-        results.summary.circularDependencies + 
-        results.summary.crossFileCycles + 
-        results.summary.hooksDependencyLoops + 
-        results.summary.simpleHooksLoops + 
+      const totalExpected =
+        results.summary.circularDependencies +
+        results.summary.crossFileCycles +
+        results.summary.hooksDependencyLoops +
+        results.summary.simpleHooksLoops +
         results.summary.improvedHooksLoops;
 
       expect(totalExpected).toBeGreaterThan(0);
@@ -60,7 +60,7 @@ describe('Hooks Integration Tests', () => {
     it('should run all analyzers without conflicts', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: '*.tsx',
-        ignore: ['clean-*']
+        ignore: ['clean-*'],
       });
 
       expect(results).toHaveProperty('circularDependencies');
@@ -80,7 +80,7 @@ describe('Hooks Integration Tests', () => {
     it('should provide comprehensive summary', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'hooks-dependency-loop.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(results.summary).toHaveProperty('filesAnalyzed');
@@ -99,10 +99,10 @@ describe('Hooks Integration Tests', () => {
   describe('Performance and Scalability', () => {
     it('should handle multiple files efficiently', async () => {
       const startTime = Date.now();
-      
+
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: '*.{tsx,ts}',
-        ignore: []
+        ignore: [],
       });
 
       const endTime = Date.now();
@@ -114,10 +114,10 @@ describe('Hooks Integration Tests', () => {
 
     it('should not consume excessive memory', async () => {
       const initialMemory = process.memoryUsage().heapUsed;
-      
+
       await detectCircularDependencies(fixturesPath, {
         pattern: '*.{tsx,ts}',
-        ignore: []
+        ignore: [],
       });
 
       const finalMemory = process.memoryUsage().heapUsed;
@@ -131,13 +131,13 @@ describe('Hooks Integration Tests', () => {
   describe('Error Resilience', () => {
     it('should handle non-existent directories gracefully', async () => {
       const nonExistentPath = path.join(fixturesPath, 'non-existent-dir');
-      
+
       // Our detector handles non-existent directories by returning empty results
       const results = await detectCircularDependencies(nonExistentPath, {
         pattern: '*.tsx',
-        ignore: []
+        ignore: [],
       });
-      
+
       expect(results.summary.filesAnalyzed).toBe(0);
     });
 
@@ -145,7 +145,7 @@ describe('Hooks Integration Tests', () => {
       // Mix of valid and potentially problematic files
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: '*.{tsx,ts}',
-        ignore: []
+        ignore: [],
       });
 
       expect(results.summary.filesAnalyzed).toBeGreaterThan(0);
@@ -157,12 +157,12 @@ describe('Hooks Integration Tests', () => {
     it('should detect patterns similar to SignalContext issue', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'hooks-dependency-loop.tsx',
-        ignore: []
+        ignore: [],
       });
 
       // Should detect state-setter-dependency patterns
-      const hasStateDependencyPattern = results.improvedHooksLoops.some(loop => 
-        loop.type === 'state-setter-dependency'
+      const hasStateDependencyPattern = results.improvedHooksLoops.some(
+        (loop) => loop.type === 'state-setter-dependency'
       );
 
       expect(hasStateDependencyPattern).toBe(true);
@@ -171,10 +171,10 @@ describe('Hooks Integration Tests', () => {
     it('should provide actionable error messages', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'hooks-dependency-loop.tsx',
-        ignore: []
+        ignore: [],
       });
 
-      results.improvedHooksLoops.forEach(loop => {
+      results.improvedHooksLoops.forEach((loop) => {
         expect(loop.description).toContain('creating infinite');
         expect(loop.description.length).toBeGreaterThan(20);
         expect(loop.file).toContain('.tsx');

@@ -122,17 +122,15 @@ export function SafeImportComponent() {
       const results = analyzeHooksIntelligently([parsedFile]);
 
       // Should detect the direct cross-file infinite loop
-      const crossFileLoops = results.filter(r => 
-        r.type === 'confirmed-infinite-loop' && 
-        r.file.includes('cross-file-component.tsx')
+      const crossFileLoops = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' && r.file.includes('cross-file-component.tsx')
       );
 
       expect(crossFileLoops.length).toBeGreaterThanOrEqual(1);
 
       // Check the direct modification case
-      const directLoop = crossFileLoops.find(r => 
-        r.problematicDependency === 'user' && 
-        r.setterFunction === 'setUser'
+      const directLoop = crossFileLoops.find(
+        (r) => r.problematicDependency === 'user' && r.setterFunction === 'setUser'
       );
 
       expect(directLoop).toBeDefined();
@@ -147,10 +145,11 @@ export function SafeImportComponent() {
       const results = analyzeHooksIntelligently([parsedFile]);
 
       // Should detect the nested cross-file infinite loop
-      const nestedLoop = results.find(r => 
-        r.type === 'confirmed-infinite-loop' && 
-        r.problematicDependency === 'profile' && 
-        r.setterFunction === 'setProfile'
+      const nestedLoop = results.find(
+        (r) =>
+          r.type === 'confirmed-infinite-loop' &&
+          r.problematicDependency === 'profile' &&
+          r.setterFunction === 'setProfile'
       );
 
       expect(nestedLoop).toBeDefined();
@@ -164,9 +163,8 @@ export function SafeImportComponent() {
       const parsedFile = parseFile(componentFile);
       const results = analyzeHooksIntelligently([parsedFile]);
 
-      const crossFileLoop = results.find(r => 
-        r.type === 'confirmed-infinite-loop' && 
-        r.problematicDependency === 'user'
+      const crossFileLoop = results.find(
+        (r) => r.type === 'confirmed-infinite-loop' && r.problematicDependency === 'user'
       );
 
       expect(crossFileLoop).toBeDefined();
@@ -185,11 +183,9 @@ export function SafeImportComponent() {
       const results = analyzeHooksIntelligently([parsedFile]);
 
       // Should not detect any infinite loops in safe component
-      const infiniteLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
       expect(infiniteLoops).toHaveLength(0);
 
-      // Might have safe patterns detected
-      const safePatterns = results.filter(r => r.type === 'safe-pattern');
       // Safe patterns are not output in CLI, so this might be empty
     });
 
@@ -199,9 +195,8 @@ export function SafeImportComponent() {
       const results = analyzeHooksIntelligently([parsedFile]);
 
       // The safe component in the same file should not trigger false positives
-      const safeComponentIssues = results.filter(r => 
-        r.type === 'confirmed-infinite-loop' && 
-        r.problematicDependency === 'data' // from SafeCrossFileComponent
+      const safeComponentIssues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' && r.problematicDependency === 'data' // from SafeCrossFileComponent
       );
 
       expect(safeComponentIssues).toHaveLength(0);
@@ -212,14 +207,14 @@ export function SafeImportComponent() {
     it('should expand file analysis to include imported utilities', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      
+
       // Should not throw and should analyze cross-file relationships
       expect(() => {
         analyzeHooksIntelligently([parsedFile]);
       }).not.toThrow();
 
       const results = analyzeHooksIntelligently([parsedFile]);
-      
+
       // Should have found cross-file modifications
       const hasIntelligentResults = results.length > 0;
       expect(hasIntelligentResults).toBe(true);
@@ -231,11 +226,11 @@ export function SafeImportComponent() {
       const results = analyzeHooksIntelligently([parsedFile]);
 
       // Should detect both direct and nested modifications
-      const confirmedLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
+      const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
       expect(confirmedLoops.length).toBeGreaterThanOrEqual(2);
 
       // Should include both user and profile state modifications
-      const dependencies = confirmedLoops.map(r => r.problematicDependency);
+      const dependencies = confirmedLoops.map((r) => r.problematicDependency);
       expect(dependencies).toContain('user');
       expect(dependencies).toContain('profile');
     });
@@ -243,20 +238,17 @@ export function SafeImportComponent() {
     it('should handle multiple files with cross-file dependencies', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const safeComponentFile = path.join(testDir, 'safe-component.tsx');
-      
-      const parsedFiles = [
-        parseFile(componentFile),
-        parseFile(safeComponentFile)
-      ];
-      
+
+      const parsedFiles = [parseFile(componentFile), parseFile(safeComponentFile)];
+
       const results = analyzeHooksIntelligently(parsedFiles);
 
       // Should detect issues in problematic file but not in safe file
-      const componentIssues = results.filter(r => 
-        r.file === componentFile && r.type === 'confirmed-infinite-loop'
+      const componentIssues = results.filter(
+        (r) => r.file === componentFile && r.type === 'confirmed-infinite-loop'
       );
-      const safeFileIssues = results.filter(r => 
-        r.file === safeComponentFile && r.type === 'confirmed-infinite-loop'
+      const safeFileIssues = results.filter(
+        (r) => r.file === safeComponentFile && r.type === 'confirmed-infinite-loop'
       );
 
       expect(componentIssues.length).toBeGreaterThan(0);
@@ -270,13 +262,12 @@ export function SafeImportComponent() {
       const parsedFile = parseFile(componentFile);
       const results = analyzeHooksIntelligently([parsedFile]);
 
-      const crossFileLoop = results.find(r => 
-        r.type === 'confirmed-infinite-loop' && 
-        r.problematicDependency === 'user'
+      const crossFileLoop = results.find(
+        (r) => r.type === 'confirmed-infinite-loop' && r.problematicDependency === 'user'
       );
 
       expect(crossFileLoop).toBeDefined();
-      
+
       // Should identify that setUser is being passed to external function
       expect(crossFileLoop!.actualStateModifications).toContain('setUser');
       expect(crossFileLoop!.explanation).toContain('infinite loop');
@@ -287,10 +278,10 @@ export function SafeImportComponent() {
       const parsedFile = parseFile(componentFile);
       const results = analyzeHooksIntelligently([parsedFile]);
 
-      const confirmedLoops = results.filter(r => r.type === 'confirmed-infinite-loop');
-      
+      const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
+
       // Should have separate detections for setUser and setProfile
-      const setterFunctions = confirmedLoops.map(r => r.setterFunction);
+      const setterFunctions = confirmedLoops.map((r) => r.setterFunction);
       expect(setterFunctions).toContain('setUser');
       expect(setterFunctions).toContain('setProfile');
     });
@@ -328,13 +319,13 @@ export function ComponentWithMissingImport() {
       fs.writeFileSync(componentWithMissingImport, content);
 
       const parsedFile = parseFile(componentWithMissingImport);
-      
+
       expect(() => {
         analyzeHooksIntelligently([parsedFile]);
       }).not.toThrow();
 
       const results = analyzeHooksIntelligently([parsedFile]);
-      
+
       // Should not crash and should return some analysis
       expect(Array.isArray(results)).toBe(true);
 
@@ -360,11 +351,8 @@ export function ComponentWithMissingImport() {
     it('should handle multiple cross-file dependencies efficiently', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const safeComponentFile = path.join(testDir, 'safe-component.tsx');
-      
-      const parsedFiles = [
-        parseFile(componentFile),
-        parseFile(safeComponentFile)
-      ];
+
+      const parsedFiles = [parseFile(componentFile), parseFile(safeComponentFile)];
 
       const startTime = Date.now();
       const results = analyzeHooksIntelligently(parsedFiles);
@@ -380,7 +368,7 @@ export function ComponentWithMissingImport() {
       // This test ensures our function call tracing doesn't get stuck in loops
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      
+
       // Should complete without hanging
       const results = analyzeHooksIntelligently([parsedFile]);
       expect(results).toBeDefined();

@@ -13,10 +13,7 @@ export const CleanComponent: React.FC = () => {
 
   return (
     <div>
-      <input 
-        value={value} 
-        onChange={(e) => handleChange(e.target.value)} 
-      />
+      <input value={value} onChange={(e) => handleChange(e.target.value)} />
     </div>
   );
 };

@@ -4,7 +4,7 @@ export function helperFunction(input: string): string {
   return input.trim().toLowerCase();
 }
 
-export function anotherHelper(data: any): any {
+export function anotherHelper<T extends Record<string, unknown>>(data: T): T & { helper: string } {
   return {
     ...data,
     helper: 'processed',

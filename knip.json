@@ -1,0 +1,8 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/cli.ts", "src/detector.ts"],
+  "project": ["src/**/*.ts"],
+  "ignore": ["tests/fixtures/**"],
+  "ignoreDependencies": [],
+  "ignoreExportsUsedInFile": true
+}

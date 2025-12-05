@@ -1,18 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+interface DataType {
+  value: number;
+  processed?: boolean;
+}
+
 function CleanExample() {
   const [count, setCount] = useState(0);
-  const [data, setData] = useState<any>(null);
-  
+  const [data, setData] = useState<DataType | null>(null);
+
   const fetchData = useCallback(() => {
     console.log('Fetching data...');
     setData({ value: count });
   }, [count]);
-  
+
   const handleIncrement = useCallback(() => {
-    setCount(prev => prev + 1);
+    setCount((prev) => prev + 1);
   }, []);
-  
+
   useEffect(() => {
     console.log('Effect running', data);
     if (data && data.value < 10) {

@@ -1,5 +1,5 @@
 import { detectImprovedHooksLoops } from '../src/improved-hooks-analyzer';
-import { parseFile } from '../src/parser';
+import { parseFile, ParsedFile } from '../src/parser';
 import * as path from 'path';
 
 describe('Improved Hooks Analyzer', () => {
@@ -14,9 +14,8 @@ describe('Improved Hooks Analyzer', () => {
       expect(results.length).toBeGreaterThan(0);
 
       // The fixture has problematicFunction that depends on 'data' and calls setData
-      const problematicFunction = results.find(r =>
-        r.functionName === 'problematicFunction' &&
-        r.type === 'state-setter-dependency'
+      const problematicFunction = results.find(
+        (r) => r.functionName === 'problematicFunction' && r.type === 'state-setter-dependency'
       );
 
       expect(problematicFunction).toBeDefined();
@@ -31,13 +30,13 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const stateDependencies = results.filter(r => r.type === 'state-setter-dependency');
+      const stateDependencies = results.filter((r) => r.type === 'state-setter-dependency');
       expect(stateDependencies.length).toBeGreaterThanOrEqual(2);
 
       // Should find problematicFunction, safeFunction, and the useEffects
       // Note: improved analyzer finds all patterns, intelligent analyzer filters better
-      const hasCallbackIssues = stateDependencies.some(r => r.hookType === 'useCallback');
-      const hasEffectIssues = stateDependencies.some(r => r.hookType === 'useEffect');
+      const hasCallbackIssues = stateDependencies.some((r) => r.hookType === 'useCallback');
+      const hasEffectIssues = stateDependencies.some((r) => r.hookType === 'useEffect');
       expect(hasCallbackIssues || hasEffectIssues).toBe(true);
     });
 
@@ -60,8 +59,8 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const effectLoops = results.filter(r => r.type === 'useEffect-function-loop');
-      
+      const effectLoops = results.filter((r) => r.type === 'useEffect-function-loop');
+
       // This test file doesn't have useEffect-function-loop patterns, so should be empty
       expect(effectLoops.length).toBe(0);
     });
@@ -71,8 +70,8 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const effectLoops = results.filter(r => r.type === 'useEffect-function-loop');
-      
+      const effectLoops = results.filter((r) => r.type === 'useEffect-function-loop');
+
       // Should return empty array if no suspicious patterns found
       expect(effectLoops).toEqual([]);
     });
@@ -86,14 +85,14 @@ describe('Improved Hooks Analyzer', () => {
 
       // Clean hooks might still have medium severity warnings due to conservative analysis
       // High severity issues should be 0
-      const highSeverityIssues = results.filter(r => r.severity === 'high');
+      const highSeverityIssues = results.filter((r) => r.severity === 'high');
       expect(highSeverityIssues).toEqual([]);
     });
 
     it('should handle malformed hook definitions', () => {
       const file = path.join(fixturesPath, 'false-positive-example.tsx');
       const parsedFile = parseFile(file);
-      
+
       expect(() => {
         detectImprovedHooksLoops([parsedFile]);
       }).not.toThrow();
@@ -101,17 +100,17 @@ describe('Improved Hooks Analyzer', () => {
 
     it('should handle non-existent files gracefully', () => {
       const nonExistentFile = path.join(fixturesPath, 'non-existent-file.tsx');
-      
+
       // parseFile should throw for non-existent files, but analyzer should handle gracefully
       expect(() => {
         parseFile(nonExistentFile);
       }).toThrow();
-      
+
       // If we somehow get a null/undefined parsed file, analyzer should not crash
       expect(() => {
         detectImprovedHooksLoops([]);
       }).not.toThrow();
-      
+
       const results = detectImprovedHooksLoops([]);
       expect(results).toEqual([]);
     });
@@ -124,7 +123,7 @@ describe('Improved Hooks Analyzer', () => {
       const results = detectImprovedHooksLoops([parsedFile]);
 
       // Should detect multiple state variables
-      const stateVariables = [...new Set(results.map(r => r.stateVariable).filter(Boolean))];
+      const stateVariables = [...new Set(results.map((r) => r.stateVariable).filter(Boolean))];
       expect(stateVariables.length).toBeGreaterThan(0);
       expect(stateVariables).toContain('isLoading');
       expect(stateVariables).toContain('data');
@@ -136,8 +135,8 @@ describe('Improved Hooks Analyzer', () => {
       const results = detectImprovedHooksLoops([parsedFile]);
 
       const stateMappings = results
-        .filter(r => r.stateVariable && r.setterFunction)
-        .map(r => ({ state: r.stateVariable, setter: r.setterFunction }));
+        .filter((r) => r.stateVariable && r.setterFunction)
+        .map((r) => ({ state: r.stateVariable, setter: r.setterFunction }));
 
       expect(stateMappings).toContainEqual({ state: 'isLoading', setter: 'setIsLoading' });
       expect(stateMappings).toContainEqual({ state: 'data', setter: 'setData' });
@@ -149,12 +148,12 @@ describe('Improved Hooks Analyzer', () => {
       const results = detectImprovedHooksLoops([parsedFile]);
 
       // Should find functions that call setState within their bodies
-      const functionsWithSetters = results.filter(r => 
-        r.type === 'state-setter-dependency' && r.severity === 'high'
+      const functionsWithSetters = results.filter(
+        (r) => r.type === 'state-setter-dependency' && r.severity === 'high'
       );
 
       expect(functionsWithSetters.length).toBeGreaterThan(0);
-      functionsWithSetters.forEach(fn => {
+      functionsWithSetters.forEach((fn) => {
         expect(fn.functionName).toBeDefined();
         expect(fn.setterFunction).toBeDefined();
       });
@@ -167,10 +166,10 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const highSeverityIssues = results.filter(r => r.severity === 'high');
+      const highSeverityIssues = results.filter((r) => r.severity === 'high');
       expect(highSeverityIssues.length).toBeGreaterThan(0);
 
-      highSeverityIssues.forEach(issue => {
+      highSeverityIssues.forEach((issue) => {
         expect(issue.type).toBe('state-setter-dependency');
         expect(issue.functionName).toBeDefined();
       });
@@ -181,10 +180,10 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const mediumSeverityIssues = results.filter(r => r.severity === 'medium');
-      
+      const mediumSeverityIssues = results.filter((r) => r.severity === 'medium');
+
       // Medium severity issues are usually from the fallback analysis
-      mediumSeverityIssues.forEach(issue => {
+      mediumSeverityIssues.forEach((issue) => {
         expect(issue.severity).toBe('medium');
         expect(issue.description).toContain('potentially creating');
       });
@@ -197,17 +196,15 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectImprovedHooksLoops([parsedFile]);
 
-      const useCallbackIssues = results.filter(r => r.hookType === 'useCallback');
+      const useCallbackIssues = results.filter((r) => r.hookType === 'useCallback');
       expect(useCallbackIssues.length).toBeGreaterThan(0);
     });
 
     it('should detect issues in useMemo hooks', () => {
       const file = path.join(fixturesPath, 'hooks-dependency-loop.tsx');
       const parsedFile = parseFile(file);
-      const results = detectImprovedHooksLoops([parsedFile]);
+      detectImprovedHooksLoops([parsedFile]);
 
-      // If there are useMemo hooks in the test file, they should be detected
-      const useMemoIssues = results.filter(r => r.hookType === 'useMemo');
       // Don't require useMemo issues since our test file might not have problematic useMemo
     });
 
@@ -217,11 +214,11 @@ describe('Improved Hooks Analyzer', () => {
       const results = detectImprovedHooksLoops([parsedFile]);
 
       // Check what hook types are actually being detected
-      const hookTypes = [...new Set(results.map(r => r.hookType))];
+      const hookTypes = [...new Set(results.map((r) => r.hookType))];
       expect(hookTypes.length).toBeGreaterThan(0);
-      
+
       // Should primarily detect useCallback issues in our test fixture
-      const useCallbackIssues = results.filter(r => r.hookType === 'useCallback');
+      const useCallbackIssues = results.filter((r) => r.hookType === 'useCallback');
       expect(useCallbackIssues.length).toBeGreaterThan(0);
     });
   });
@@ -232,7 +229,7 @@ describe('Improved Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
 
       expect(parsedFile.hooks.length).toBeGreaterThan(0);
-      
+
       const results = detectImprovedHooksLoops([parsedFile]);
       expect(results.length).toBeGreaterThan(0);
     });
@@ -240,16 +237,18 @@ describe('Improved Hooks Analyzer', () => {
     it('should handle multiple files', () => {
       const files = [
         path.join(fixturesPath, 'hooks-dependency-loop.tsx'),
-        path.join(fixturesPath, 'clean-example.tsx')
+        path.join(fixturesPath, 'clean-example.tsx'),
       ];
 
-      const parsedFiles = files.map(file => {
-        try {
-          return parseFile(file);
-        } catch {
-          return null;
-        }
-      }).filter(Boolean) as any[];
+      const parsedFiles = files
+        .map((file) => {
+          try {
+            return parseFile(file);
+          } catch {
+            return null;
+          }
+        })
+        .filter((f): f is ParsedFile => f !== null);
 
       const results = detectImprovedHooksLoops(parsedFiles);
       expect(results).toBeDefined();

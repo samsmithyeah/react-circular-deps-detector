@@ -8,18 +8,18 @@ describe('Circular Dependency Detector', () => {
     it('should detect circular dependencies in problematic file', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: 'circular-example.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.circularDependencies.length).toBeGreaterThan(0);
       expect(result.summary.circularDependencies).toBeGreaterThan(0);
-      
+
       // Check that it found the specific circular dependencies we created
-      const cycles = result.circularDependencies.map(dep => dep.cycle);
-      
+      const cycles = result.circularDependencies.map((dep) => dep.cycle);
+
       // Should find functionA → functionB → functionA cycle
-      const hasFunctionCycle = cycles.some(cycle => 
-        cycle.includes('functionA') && cycle.includes('functionB')
+      const hasFunctionCycle = cycles.some(
+        (cycle) => cycle.includes('functionA') && cycle.includes('functionB')
       );
       expect(hasFunctionCycle).toBe(true);
     });
@@ -27,12 +27,12 @@ describe('Circular Dependency Detector', () => {
     it('should provide detailed information about circular dependencies', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: 'circular-example.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.circularDependencies.length).toBeGreaterThan(0);
-      
-      result.circularDependencies.forEach(dep => {
+
+      result.circularDependencies.forEach((dep) => {
         expect(dep.file).toContain('circular-example.tsx');
         expect(dep.line).toBeGreaterThan(0);
         expect(dep.hookName).toMatch(/^use(Callback|Memo|Effect)$/);
@@ -46,7 +46,7 @@ describe('Circular Dependency Detector', () => {
     it('should not find circular dependencies in clean file', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: 'clean-example.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.circularDependencies).toHaveLength(0);
@@ -60,7 +60,7 @@ describe('Circular Dependency Detector', () => {
     it('should not flag false positives as circular dependencies', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: 'false-positive-example.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.circularDependencies).toHaveLength(0);
@@ -72,17 +72,15 @@ describe('Circular Dependency Detector', () => {
     it('should analyze multiple files correctly', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: '*.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.summary.filesAnalyzed).toBe(8);
       expect(result.summary.hooksAnalyzed).toBeGreaterThan(0);
-      
+
       // Should find circular dependencies in multiple files
-      const circularFiles = result.circularDependencies.map(dep => 
-        path.basename(dep.file)
-      );
-      
+      const circularFiles = result.circularDependencies.map((dep) => path.basename(dep.file));
+
       expect(circularFiles).toContain('circular-example.tsx');
       expect(circularFiles).toContain('real-circular-example.tsx');
     });
@@ -92,7 +90,7 @@ describe('Circular Dependency Detector', () => {
     it('should handle empty directories gracefully', async () => {
       const result = await detectCircularDependencies('/tmp/nonexistent', {
         pattern: '*.tsx',
-        ignore: []
+        ignore: [],
       });
 
       expect(result.circularDependencies).toHaveLength(0);
@@ -103,13 +101,13 @@ describe('Circular Dependency Detector', () => {
     it('should handle ignore patterns correctly', async () => {
       const result = await detectCircularDependencies(fixturesPath, {
         pattern: '*.tsx',
-        ignore: ['**/circular-example.tsx']
+        ignore: ['**/circular-example.tsx'],
       });
 
       // Should not analyze the ignored file
       expect(result.summary.filesAnalyzed).toBe(7); // 8 total - 1 ignored = 7
-      const analyzedFilenames = result.circularDependencies.map(dep => path.basename(dep.file));
-      expect(analyzedFilenames.every(filename => filename !== 'circular-example.tsx')).toBe(true);
+      const analyzedFilenames = result.circularDependencies.map((dep) => path.basename(dep.file));
+      expect(analyzedFilenames.every((filename) => filename !== 'circular-example.tsx')).toBe(true);
       // May still find circular dependencies in other files like real-circular-example.tsx
     });
   });
@@ -117,15 +115,15 @@ describe('Circular Dependency Detector', () => {
   describe('Performance', () => {
     it('should complete analysis in reasonable time', async () => {
       const startTime = Date.now();
-      
+
       await detectCircularDependencies(fixturesPath, {
         pattern: '*.tsx',
-        ignore: []
+        ignore: [],
       });
 
       const endTime = Date.now();
       const duration = endTime - startTime;
-      
+
       // Should complete in under 5 seconds for small test files
       expect(duration).toBeLessThan(5000);
     });
