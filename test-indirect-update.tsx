@@ -9,9 +9,13 @@ export function IndirectUpdateComponent() {
     // This should create infinite loop:
     // user changes → effect runs → processUserIndirectly modifies user → user changes → repeat
     processUserIndirectly(user);
-  }, [user]); 
+  }, [user]);
 
-  return <div>User: {user.name} v{user.version}</div>;
+  return (
+    <div>
+      User: {user.name} v{user.version}
+    </div>
+  );
 }
 
 // Component that passes both data and setter to imported function

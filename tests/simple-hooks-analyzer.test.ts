@@ -25,7 +25,7 @@ describe('Simple Hooks Analyzer', () => {
 
     it('should not crash on malformed files', () => {
       const file = path.join(fixturesPath, 'edge-case-hooks.tsx');
-      
+
       expect(() => {
         const parsedFile = parseFile(file);
         detectSimpleHooksLoops([parsedFile]);
@@ -36,12 +36,12 @@ describe('Simple Hooks Analyzer', () => {
   describe('Error Handling', () => {
     it('should handle files that cannot be parsed', () => {
       const nonExistentFile = path.join(fixturesPath, 'non-existent.tsx');
-      
+
       expect(() => {
         try {
           const parsedFile = parseFile(nonExistentFile);
           detectSimpleHooksLoops([parsedFile]);
-        } catch (error) {
+        } catch {
           // Expected to throw, but detectSimpleHooksLoops should handle this gracefully
         }
       }).not.toThrow();
@@ -59,7 +59,7 @@ describe('Simple Hooks Analyzer', () => {
       const parsedFile = parseFile(file);
       const results = detectSimpleHooksLoops([parsedFile]);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type');
         expect(result).toHaveProperty('description');
         expect(result).toHaveProperty('file');
@@ -67,7 +67,7 @@ describe('Simple Hooks Analyzer', () => {
         expect(result).toHaveProperty('hookName');
         expect(result).toHaveProperty('problematicDependency');
         expect(result).toHaveProperty('severity');
-        
+
         expect(['state-setter-dependency', 'useEffect-function-dependency']).toContain(result.type);
         expect(['high', 'medium']).toContain(result.severity);
       });

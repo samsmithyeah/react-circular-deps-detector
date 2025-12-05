@@ -54,7 +54,7 @@ export function getTsconfigForProject(projectRoot: string): TsConfigResult | nul
 
     tsconfigCache.set(projectRoot, result);
     return result;
-  } catch (error) {
+  } catch {
     tsconfigCache.set(projectRoot, null);
     return null;
   }
@@ -78,7 +78,7 @@ export function getPathsMatcher(projectRoot: string): ReturnType<typeof createPa
     const matcher = createPathsMatcher(tsconfig);
     pathsMatcherCache.set(projectRoot, matcher);
     return matcher;
-  } catch (error) {
+  } catch {
     pathsMatcherCache.set(projectRoot, null);
     return null;
   }
@@ -128,7 +128,7 @@ export function createPathResolver(options: PathResolverOptions): PathResolver {
       }
 
       return null;
-    }
+    },
   };
 }
 
@@ -171,9 +171,12 @@ function resolveWithExtensions(basePath: string): string | null {
 
         // Check exports field first (modern)
         if (pkgJson.exports) {
-          const mainExport = typeof pkgJson.exports === 'string'
-            ? pkgJson.exports
-            : pkgJson.exports['.']?.default || pkgJson.exports['.']?.import || pkgJson.exports['.'];
+          const mainExport =
+            typeof pkgJson.exports === 'string'
+              ? pkgJson.exports
+              : pkgJson.exports['.']?.default ||
+                pkgJson.exports['.']?.import ||
+                pkgJson.exports['.'];
 
           if (mainExport && typeof mainExport === 'string') {
             const exportPath = path.resolve(basePath, mainExport);
@@ -190,7 +193,7 @@ function resolveWithExtensions(basePath: string): string | null {
             return mainPath;
           }
         }
-      } catch (e) {
+      } catch {
         // Ignore JSON parse errors
       }
     }
@@ -205,39 +208,4 @@ function resolveWithExtensions(basePath: string): string | null {
   }
 
   return null;
-}
-
-/**
- * Check if an import path is a path alias (not relative, not a node module)
- */
-export function isPathAlias(importPath: string): boolean {
-  // Relative imports
-  if (importPath.startsWith('./') || importPath.startsWith('../')) {
-    return false;
-  }
-
-  // Common path alias patterns
-  if (importPath.startsWith('@/') || importPath.startsWith('~/')) {
-    return true;
-  }
-
-  // Could be a scoped package (@org/pkg) - these are NOT path aliases
-  if (importPath.startsWith('@') && !importPath.startsWith('@/')) {
-    // Check if it looks like a scoped npm package
-    const parts = importPath.split('/');
-    if (parts.length >= 2 && !parts[0].includes('@/')) {
-      // Likely a scoped package like @types/react
-      return false;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Clear the resolver caches (useful for testing)
- */
-export function clearResolverCaches(): void {
-  tsconfigCache.clear();
-  pathsMatcherCache.clear();
 }

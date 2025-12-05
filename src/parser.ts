@@ -33,8 +33,8 @@ export interface ParsedFile {
   exports: ExportInfo[];
   functions: Set<string>;
   contexts: Set<string>;
-  ast: t.File;  // Store the parsed AST to avoid re-parsing
-  content: string;  // Store file content for comment analysis
+  ast: t.File; // Store the parsed AST to avoid re-parsing
+  content: string; // Store file content for comment analysis
 }
 
 const REACT_HOOKS = [
@@ -81,7 +81,7 @@ export function parseFile(filePath: string): ParsedFile {
 
     CallExpression(path: NodePath<t.CallExpression>) {
       const callee = path.node.callee;
-      
+
       if (t.isIdentifier(callee) && REACT_HOOKS.includes(callee.name)) {
         const hookInfo = extractHookInfo(path, callee.name, filePath);
         if (hookInfo) {
@@ -90,16 +90,20 @@ export function parseFile(filePath: string): ParsedFile {
       }
 
       // Detect React.createContext calls
-      if (t.isMemberExpression(callee) && 
-          t.isIdentifier(callee.object) && callee.object.name === 'React' &&
-          t.isIdentifier(callee.property) && callee.property.name === 'createContext') {
+      if (
+        t.isMemberExpression(callee) &&
+        t.isIdentifier(callee.object) &&
+        callee.object.name === 'React' &&
+        t.isIdentifier(callee.property) &&
+        callee.property.name === 'createContext'
+      ) {
         const parent = path.parent;
         if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           contexts.add(parent.id.name);
         }
       }
     },
-    
+
     VariableDeclarator(path: NodePath<t.VariableDeclarator>) {
       if (t.isIdentifier(path.node.id)) {
         const varName = path.node.id.name;
@@ -155,7 +159,7 @@ function extractHookInfo(
 
   const dependencies = depsArray.elements
     .filter((el): el is t.Identifier => t.isIdentifier(el))
-    .map(el => el.name);
+    .map((el) => el.name);
 
   const loc = path.node.loc;
   return {
@@ -169,38 +173,42 @@ function extractHookInfo(
 
 function extractVariableDependencies(node: t.Node | null | undefined): Set<string> {
   const deps = new Set<string>();
-  
+
   if (!node) return deps;
 
   try {
     traverse(node, {
       Identifier(path: NodePath<t.Identifier>) {
         if (!path.isReferencedIdentifier()) return;
-        
+
         try {
           const binding = path.scope?.getBinding?.(path.node.name);
           // Only include identifiers that are actually function/variable references
           // Skip built-in objects, imports, and React hooks
           if (!binding || binding.scope === path.scope) return;
-          
+
           const name = path.node.name;
-          
+
           // Skip React hooks and common imports
           if (name.startsWith('use') && name[3] === name[3].toUpperCase()) return;
           if (['console', 'window', 'document', 'process', 'Buffer'].includes(name)) return;
-          
+
           // Only include if it looks like a local variable or function
-          if (binding.kind === 'var' || binding.kind === 'let' || binding.kind === 'const' || 
-              binding.kind === 'hoisted') {
+          if (
+            binding.kind === 'var' ||
+            binding.kind === 'let' ||
+            binding.kind === 'const' ||
+            binding.kind === 'hoisted'
+          ) {
             deps.add(name);
           }
-        } catch (e) {
+        } catch {
           // Skip identifiers that cause errors
         }
       },
       noScope: true,
     });
-  } catch (e) {
+  } catch {
     // Skip nodes that cause errors
   }
 
@@ -211,7 +219,7 @@ function extractImportInfo(path: NodePath<t.ImportDeclaration>): ImportInfo | nu
   const source = path.node.source.value;
   const loc = path.node.loc;
   const line = loc?.start.line || 0;
-  
+
   // Skip non-relative imports (external libraries)
   if (!source.startsWith('.') && !source.startsWith('/')) {
     return null;
@@ -221,7 +229,7 @@ function extractImportInfo(path: NodePath<t.ImportDeclaration>): ImportInfo | nu
   let isDefaultImport = false;
   let isNamespaceImport = false;
 
-  path.node.specifiers.forEach(spec => {
+  path.node.specifiers.forEach((spec) => {
     if (t.isImportDefaultSpecifier(spec)) {
       imports.push(spec.local.name);
       isDefaultImport = true;
@@ -251,7 +259,7 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     // export const foo = ...
     // export function foo() { ... }
     if (t.isVariableDeclaration(path.node.declaration)) {
-      path.node.declaration.declarations.forEach(decl => {
+      path.node.declaration.declarations.forEach((decl) => {
         if (t.isIdentifier(decl.id)) {
           exports.push({
             name: decl.id.name,
@@ -269,7 +277,7 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     }
   } else if (path.node.specifiers) {
     // export { foo, bar }
-    path.node.specifiers.forEach(spec => {
+    path.node.specifiers.forEach((spec) => {
       if (t.isExportSpecifier(spec)) {
         exports.push({
           name: spec.exported.type === 'Identifier' ? spec.exported.name : spec.exported.value,

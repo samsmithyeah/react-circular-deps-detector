@@ -11,9 +11,9 @@ describe('Parser', () => {
 
       expect(result.file).toBe(filePath);
       expect(result.hooks.length).toBeGreaterThan(0);
-      
+
       // Should find useCallback, useMemo, useEffect hooks
-      const hookNames = result.hooks.map(hook => hook.name);
+      const hookNames = result.hooks.map((hook) => hook.name);
       expect(hookNames).toContain('useCallback');
       expect(hookNames).toContain('useMemo');
       expect(hookNames).toContain('useEffect');
@@ -23,13 +23,13 @@ describe('Parser', () => {
       const filePath = path.join(fixturesPath, 'circular-example.tsx');
       const result = parseFile(filePath);
 
-      const hooksWithDeps = result.hooks.filter(hook => hook.dependencies.length > 0);
+      const hooksWithDeps = result.hooks.filter((hook) => hook.dependencies.length > 0);
       expect(hooksWithDeps.length).toBeGreaterThan(0);
 
       // Check that dependencies are extracted as strings
-      hooksWithDeps.forEach(hook => {
+      hooksWithDeps.forEach((hook) => {
         expect(hook.dependencies).toBeInstanceOf(Array);
-        hook.dependencies.forEach(dep => {
+        hook.dependencies.forEach((dep) => {
           expect(typeof dep).toBe('string');
           expect(dep.length).toBeGreaterThan(0);
         });
@@ -40,7 +40,7 @@ describe('Parser', () => {
       const filePath = path.join(fixturesPath, 'clean-example.tsx');
       const result = parseFile(filePath);
 
-      result.hooks.forEach(hook => {
+      result.hooks.forEach((hook) => {
         expect(hook.line).toBeGreaterThan(0);
         expect(hook.column).toBeGreaterThanOrEqual(0);
         expect(hook.file).toBe(filePath);
@@ -69,8 +69,7 @@ describe('Parser', () => {
       const filePath = path.join(fixturesPath, 'clean-example.tsx');
       const result = parseFile(filePath);
 
-      const supportedHooks = ['useEffect', 'useLayoutEffect', 'useMemo', 'useCallback', 'useImperativeHandle'];
-      const foundHooks = result.hooks.map(hook => hook.name);
+      const foundHooks = result.hooks.map((hook) => hook.name);
 
       // Should find at least some of the supported hooks
       const hasUseMemo = foundHooks.includes('useMemo');

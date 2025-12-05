@@ -1,10 +1,16 @@
 import * as t from '@babel/types';
-import traverse from '@babel/traverse';
+import traverse, { NodePath } from '@babel/traverse';
 import * as fs from 'fs';
 import * as path from 'path';
-import { HookInfo, ParsedFile, parseFile } from './parser';
+import { ParsedFile, parseFile } from './parser';
 import { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analyzer';
 import { createPathResolver, PathResolver } from './path-resolver';
+
+interface HookNodeInfo {
+  node: t.CallExpression;
+  hookName: string;
+  line: number;
+}
 
 export interface IntelligentHookAnalysis {
   type: 'confirmed-infinite-loop' | 'potential-issue' | 'safe-pattern';
@@ -54,13 +60,11 @@ interface GuardedModification {
 
 function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
   const allFiles = [...parsedFiles];
-  const processedPaths = new Set(parsedFiles.map(f => f.file));
+  const processedPaths = new Set(parsedFiles.map((f) => f.file));
 
   // Find project root for path resolution
   const projectRoot = findProjectRoot(parsedFiles);
-  const pathResolver = projectRoot
-    ? createPathResolver({ projectRoot })
-    : null;
+  const pathResolver = projectRoot ? createPathResolver({ projectRoot }) : null;
 
   // Extract imports from React files and try to include utility files
   for (const file of parsedFiles) {
@@ -72,7 +76,7 @@ function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
           const parsed = parseFile(importPath);
           allFiles.push(parsed);
           processedPaths.add(importPath);
-        } catch (error) {
+        } catch {
           // Silently skip files that can't be parsed
         }
       }
@@ -120,11 +124,15 @@ function extractImportPaths(filePath: string, pathResolver: PathResolver | null)
     });
 
     traverse(ast, {
-      ImportDeclaration(nodePath: any) {
+      ImportDeclaration(nodePath: NodePath<t.ImportDeclaration>) {
         const importPath = nodePath.node.source.value;
 
         // Skip node_modules imports (but not path aliases)
-        if (!importPath.startsWith('.') && !importPath.startsWith('@/') && !importPath.startsWith('~/')) {
+        if (
+          !importPath.startsWith('.') &&
+          !importPath.startsWith('@/') &&
+          !importPath.startsWith('~/')
+        ) {
           // Check if it's a scoped package like @types/react
           if (importPath.startsWith('@') && importPath.includes('/')) {
             const parts = importPath.split('/');
@@ -153,9 +161,9 @@ function extractImportPaths(filePath: string, pathResolver: PathResolver | null)
         if (resolvedPath) {
           imports.push(resolvedPath);
         }
-      }
+      },
     });
-  } catch (error) {
+  } catch {
     // Ignore parsing errors
   }
 
@@ -165,14 +173,14 @@ function extractImportPaths(filePath: string, pathResolver: PathResolver | null)
 function resolveImportPath(fromFile: string, importPath: string): string | null {
   const basePath = path.dirname(fromFile);
   const extensions = ['.ts', '.tsx', '.js', '.jsx'];
-  
+
   for (const ext of extensions) {
     const fullPath = path.resolve(basePath, importPath + ext);
     if (fs.existsSync(fullPath)) {
       return fullPath;
     }
   }
-  
+
   // Try with index files
   for (const ext of extensions) {
     const indexPath = path.resolve(basePath, importPath, 'index' + ext);
@@ -180,7 +188,7 @@ function resolveImportPath(fromFile: string, importPath: string): string | null 
       return indexPath;
     }
   }
-  
+
   return null;
 }
 
@@ -207,7 +215,10 @@ export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): Intelligen
   return results;
 }
 
-function analyzeFileIntelligently(file: ParsedFile, crossFileAnalysis: CrossFileAnalysis): IntelligentHookAnalysis[] {
+function analyzeFileIntelligently(
+  file: ParsedFile,
+  crossFileAnalysis: CrossFileAnalysis
+): IntelligentHookAnalysis[] {
   const results: IntelligentHookAnalysis[] = [];
 
   try {
@@ -221,12 +232,17 @@ function analyzeFileIntelligently(file: ParsedFile, crossFileAnalysis: CrossFile
     const hookNodes = findHookNodes(ast);
 
     for (const hookNode of hookNodes) {
-      const analysis = analyzeHookNode(hookNode, stateInfo, file.file, crossFileAnalysis, file.content);
+      const analysis = analyzeHookNode(
+        hookNode,
+        stateInfo,
+        file.file,
+        crossFileAnalysis,
+        file.content
+      );
       if (analysis) {
         results.push(analysis);
       }
     }
-
   } catch (error) {
     console.warn(`Could not parse ${file.file} for intelligent analysis:`, error);
   }
@@ -238,18 +254,16 @@ function extractStateInfo(ast: t.Node) {
   const stateVariables = new Map<string, string>(); // state var -> setter name
 
   traverse(ast, {
-    VariableDeclarator(path: any) {
+    VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
       // Extract useState patterns: const [state, setState] = useState(...)
-      if (t.isArrayPattern(path.node.id) &&
-          t.isCallExpression(path.node.init) &&
-          t.isIdentifier(path.node.init.callee) &&
-          path.node.init.callee.name === 'useState') {
-
-        const elements = path.node.id.elements;
-        if (elements.length >= 2 &&
-            t.isIdentifier(elements[0]) &&
-            t.isIdentifier(elements[1])) {
-
+      if (
+        t.isArrayPattern(nodePath.node.id) &&
+        t.isCallExpression(nodePath.node.init) &&
+        t.isIdentifier(nodePath.node.init.callee) &&
+        nodePath.node.init.callee.name === 'useState'
+      ) {
+        const elements = nodePath.node.id.elements;
+        if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
           const stateVar = elements[0].name;
           const setter = elements[1].name;
           stateVariables.set(stateVar, setter);
@@ -258,35 +272,37 @@ function extractStateInfo(ast: t.Node) {
 
       // Extract custom hook patterns: const [state, setState] = useCustomHook(...)
       // Custom hooks start with 'use' and return array destructuring
-      if (t.isArrayPattern(path.node.id) &&
-          t.isCallExpression(path.node.init) &&
-          t.isIdentifier(path.node.init.callee) &&
-          path.node.init.callee.name.startsWith('use') &&
-          path.node.init.callee.name !== 'useState') {
-
-        const elements = path.node.id.elements;
-        if (elements.length >= 2 &&
-            t.isIdentifier(elements[0]) &&
-            t.isIdentifier(elements[1])) {
-
+      if (
+        t.isArrayPattern(nodePath.node.id) &&
+        t.isCallExpression(nodePath.node.init) &&
+        t.isIdentifier(nodePath.node.init.callee) &&
+        nodePath.node.init.callee.name.startsWith('use') &&
+        nodePath.node.init.callee.name !== 'useState'
+      ) {
+        const elements = nodePath.node.id.elements;
+        if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
           const firstElement = elements[0].name;
           const secondElement = elements[1].name;
 
           // Check if second element looks like a setter (starts with 'set' + uppercase)
-          if (secondElement.startsWith('set') && secondElement.length > 3 &&
-              secondElement[3] === secondElement[3].toUpperCase()) {
+          if (
+            secondElement.startsWith('set') &&
+            secondElement.length > 3 &&
+            secondElement[3] === secondElement[3].toUpperCase()
+          ) {
             stateVariables.set(firstElement, secondElement);
           }
         }
       }
 
       // Extract useContext patterns: const { data, setData } = useContext(MyContext)
-      if (t.isObjectPattern(path.node.id) &&
-          t.isCallExpression(path.node.init) &&
-          t.isIdentifier(path.node.init.callee) &&
-          path.node.init.callee.name === 'useContext') {
-
-        const properties = path.node.id.properties;
+      if (
+        t.isObjectPattern(nodePath.node.id) &&
+        t.isCallExpression(nodePath.node.init) &&
+        t.isIdentifier(nodePath.node.init.callee) &&
+        nodePath.node.init.callee.name === 'useContext'
+      ) {
+        const properties = nodePath.node.id.properties;
         const extractedNames: string[] = [];
 
         // First pass: collect all destructured names
@@ -301,8 +317,7 @@ function extractStateInfo(ast: t.Node) {
         // Second pass: match setters with state variables
         for (const name of extractedNames) {
           // Check if this is a setter (starts with 'set' + uppercase)
-          if (name.startsWith('set') && name.length > 3 &&
-              name[3] === name[3].toUpperCase()) {
+          if (name.startsWith('set') && name.length > 3 && name[3] === name[3].toUpperCase()) {
             // Try to find corresponding state variable
             const stateVar = name.charAt(3).toLowerCase() + name.slice(4);
             if (extractedNames.includes(stateVar)) {
@@ -311,35 +326,35 @@ function extractStateInfo(ast: t.Node) {
           }
         }
       }
-    }
+    },
   });
 
   return stateVariables;
 }
 
-function findHookNodes(ast: t.Node) {
-  const hookNodes: any[] = [];
-  
+function findHookNodes(ast: t.Node): HookNodeInfo[] {
+  const hookNodes: HookNodeInfo[] = [];
+
   traverse(ast, {
-    CallExpression(path: any) {
-      if (t.isIdentifier(path.node.callee)) {
-        const hookName = path.node.callee.name;
+    CallExpression(nodePath: NodePath<t.CallExpression>) {
+      if (t.isIdentifier(nodePath.node.callee)) {
+        const hookName = nodePath.node.callee.name;
         if (['useEffect', 'useCallback', 'useMemo'].includes(hookName)) {
           hookNodes.push({
-            node: path.node,
+            node: nodePath.node,
             hookName,
-            line: path.node.loc?.start.line || 0
+            line: nodePath.node.loc?.start.line || 0,
           });
         }
       }
-    }
+    },
   });
 
   return hookNodes;
 }
 
 function analyzeHookNode(
-  hookNode: any,
+  hookNode: HookNodeInfo,
   stateInfo: Map<string, string>,
   filePath: string,
   crossFileAnalysis: CrossFileAnalysis,
@@ -349,7 +364,7 @@ function analyzeHookNode(
 
   // Check for ignore comments: // rcd-ignore or // rcd-ignore-next-line
   if (fileContent && isHookIgnored(fileContent, line)) {
-    return null;  // Skip this hook - user has explicitly ignored it
+    return null; // Skip this hook - user has explicitly ignored it
   }
 
   if (!node.arguments || node.arguments.length < 2) {
@@ -364,7 +379,7 @@ function analyzeHookNode(
 
   const dependencies = depsArray.elements
     .filter((el): el is t.Identifier => t.isIdentifier(el))
-    .map(el => el.name);
+    .map((el) => el.name);
 
   // Analyze hook body for state interactions
   const hookBody = node.arguments[0];
@@ -382,7 +397,7 @@ function analyzeHookNode(
   // Check if dependencies are only passed as references (not invoked)
   // e.g., addEventListener('resize', handleResize) - handleResize is passed, not called
   const depsPassedAsRefs = new Set(
-    stateInteractions.functionReferences.map(ref => ref.functionName)
+    stateInteractions.functionReferences.map((ref) => ref.functionName)
   );
 
   // Check for problematic patterns
@@ -392,7 +407,7 @@ function analyzeHookNode(
 
     // Check if this setter has a safe guard
     const guardedMod = stateInteractions.guardedModifications.find(
-      g => g.setter === setter && g.stateVariable === dep
+      (g) => g.setter === setter && g.stateVariable === dep
     );
 
     if (guardedMod) {
@@ -410,7 +425,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: [setter],
           stateReads: stateInteractions.reads,
-          explanation: `Hook modifies '${dep}' but has a ${guardedMod.guardType} that prevents infinite loops.`
+          explanation: `Hook modifies '${dep}' but has a ${guardedMod.guardType} that prevents infinite loops.`,
         });
       }
 
@@ -428,9 +443,10 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: [setter],
           stateReads: stateInteractions.reads,
-          explanation: guardedMod.warning ||
+          explanation:
+            guardedMod.warning ||
             `Guard checks property of '${dep}' but setter creates new object reference. ` +
-            `The object identity changes even when the guarded property doesn't, which may cause unexpected re-renders.`
+              `The object identity changes even when the guarded property doesn't, which may cause unexpected re-renders.`,
         });
       }
     }
@@ -439,7 +455,7 @@ function analyzeHookNode(
     // e.g., useEffect(() => { addEventListener('resize', handleResize) }, [handleResize])
     // The handleResize function modifies state, but it's not called during effect execution
     if (depsPassedAsRefs.has(dep)) {
-      const refInfo = stateInteractions.functionReferences.find(r => r.functionName === dep);
+      const refInfo = stateInteractions.functionReferences.find((r) => r.functionName === dep);
       // If it's only used as a reference and the state modification happens through that function,
       // it's safe because the function won't be invoked synchronously during effect execution
       return createAnalysis({
@@ -454,7 +470,7 @@ function analyzeHookNode(
         setterFunction: setter,
         actualStateModifications: [],
         stateReads: stateInteractions.reads,
-        explanation: `'${dep}' is passed as a ${refInfo?.context || 'callback'} reference to '${refInfo?.receivingFunction || 'a function'}', not invoked directly. This is a safe pattern.`
+        explanation: `'${dep}' is passed as a ${refInfo?.context || 'callback'} reference to '${refInfo?.receivingFunction || 'a function'}', not invoked directly. This is a safe pattern.`,
       });
     }
 
@@ -473,7 +489,7 @@ function analyzeHookNode(
         setterFunction: setter,
         actualStateModifications: stateInteractions.deferredModifications,
         stateReads: stateInteractions.reads,
-        explanation: `'${setter}()' is called inside an async callback (setInterval, onSnapshot, etc.), not during effect execution. This is a safe pattern - the state update is deferred and won't cause an immediate re-render loop.`
+        explanation: `'${setter}()' is called inside an async callback (setInterval, onSnapshot, etc.), not during effect execution. This is a safe pattern - the state update is deferred and won't cause an immediate re-render loop.`,
       });
     }
 
@@ -492,7 +508,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`
+          explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`,
         });
       } else {
         // useCallback/useMemo - can't cause loops directly
@@ -513,7 +529,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute), but review if a useEffect depends on this callback.`
+          explanation: `${hookName} modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute), but review if a useEffect depends on this callback.`,
         });
       }
     }
@@ -533,7 +549,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: crossFileModifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} indirectly modifies '${dep}' via function calls while depending on it, creating guaranteed infinite loop.`
+          explanation: `${hookName} indirectly modifies '${dep}' via function calls while depending on it, creating guaranteed infinite loop.`,
         });
       } else {
         return createAnalysis({
@@ -548,7 +564,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: crossFileModifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} indirectly modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute).`
+          explanation: `${hookName} indirectly modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute).`,
         });
       }
     }
@@ -568,7 +584,7 @@ function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.conditionalModifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} conditionally modifies '${dep}' - review if conditions prevent infinite loops.`
+          explanation: `${hookName} conditionally modifies '${dep}' - review if conditions prevent infinite loops.`,
         });
       } else {
         // useCallback/useMemo with conditional modification - very unlikely to be a problem
@@ -577,9 +593,11 @@ function analyzeHookNode(
     }
 
     // Only reads state, doesn't modify - this is safe!
-    if (stateInteractions.reads.includes(dep) &&
-        !stateInteractions.modifications.includes(setter) &&
-        !crossFileModifications.includes(setter)) {
+    if (
+      stateInteractions.reads.includes(dep) &&
+      !stateInteractions.modifications.includes(setter) &&
+      !crossFileModifications.includes(setter)
+    ) {
       return createAnalysis({
         type: 'safe-pattern',
         severity: 'low',
@@ -592,7 +610,7 @@ function analyzeHookNode(
         setterFunction: setter,
         actualStateModifications: [],
         stateReads: stateInteractions.reads,
-        explanation: `Hook only reads from '${dep}' without modifying it - this pattern is safe.`
+        explanation: `Hook only reads from '${dep}' without modifying it - this pattern is safe.`,
       });
     }
   }
@@ -600,7 +618,10 @@ function analyzeHookNode(
   return null;
 }
 
-function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, string>): StateInteraction {
+function analyzeStateInteractions(
+  hookBody: t.Node,
+  stateInfo: Map<string, string>
+): StateInteraction {
   const interactions: StateInteraction = {
     reads: [],
     modifications: [],
@@ -608,7 +629,7 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
     functionalUpdates: [],
     deferredModifications: [],
     guardedModifications: [],
-    functionReferences: []
+    functionReferences: [],
   };
 
   const setterNames = Array.from(stateInfo.values());
@@ -619,37 +640,64 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
   stateInfo.forEach((setter, state) => setterToState.set(setter, state));
 
   // Track ancestor chain for proper conditional analysis
-  const ancestorStack: any[] = [];
+  const ancestorStack: t.Node[] = [];
 
   // Common event listener methods that receive callback references (not invoked immediately)
   const eventListenerMethods = new Set([
-    'addEventListener', 'removeEventListener',
-    'on', 'off', 'once', 'addListener', 'removeListener',
-    'subscribe', 'unsubscribe',
-    'setTimeout', 'setInterval', 'requestAnimationFrame',
-    'then', 'catch', 'finally',  // Promise methods
-    'map', 'filter', 'forEach', 'reduce', 'find', 'some', 'every',  // Array methods
+    'addEventListener',
+    'removeEventListener',
+    'on',
+    'off',
+    'once',
+    'addListener',
+    'removeListener',
+    'subscribe',
+    'unsubscribe',
+    'setTimeout',
+    'setInterval',
+    'requestAnimationFrame',
+    'then',
+    'catch',
+    'finally', // Promise methods
+    'map',
+    'filter',
+    'forEach',
+    'reduce',
+    'find',
+    'some',
+    'every', // Array methods
   ]);
 
   // Functions that execute their callbacks asynchronously (deferred execution)
   // State modifications inside these callbacks won't cause immediate re-render loops
   const asyncCallbackFunctions = new Set([
-    'setTimeout', 'setInterval', 'requestAnimationFrame', 'requestIdleCallback',
-    'then', 'catch', 'finally',  // Promise methods
-    'onSnapshot', 'onAuthStateChanged', 'onValue', 'onChildAdded', 'onChildChanged', 'onChildRemoved', // Firebase
-    'subscribe', 'observe',  // Common subscription patterns
-    'addEventListener',  // Event listeners are async (user-triggered)
+    'setTimeout',
+    'setInterval',
+    'requestAnimationFrame',
+    'requestIdleCallback',
+    'then',
+    'catch',
+    'finally', // Promise methods
+    'onSnapshot',
+    'onAuthStateChanged',
+    'onValue',
+    'onChildAdded',
+    'onChildChanged',
+    'onChildRemoved', // Firebase
+    'subscribe',
+    'observe', // Common subscription patterns
+    'addEventListener', // Event listeners are async (user-triggered)
   ]);
 
   // Track functions that are passed as arguments (not invoked)
   const functionsPassedAsArgs = new Set<string>();
 
   // Track CallExpression nodes that are async callback receivers
-  const asyncCallbackNodes = new Set<any>();
+  const asyncCallbackNodes = new Set<t.Node>();
 
   // First pass: find all functions passed as arguments to known safe receivers
   // AND track async callback nodes (calls to setInterval, onSnapshot, etc. with inline callbacks)
-  function findFunctionReferences(node: any): void {
+  function findFunctionReferences(node: t.Node | null | undefined): void {
     if (!node || typeof node !== 'object') return;
 
     // Check for calls like: addEventListener('click', handleClick) or obj.addEventListener(...)
@@ -661,7 +709,10 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
         receivingFuncName = node.callee.name;
       }
       // Handle: element.addEventListener('click', handler) or window.addEventListener(...)
-      else if (node.callee?.type === 'MemberExpression' && node.callee.property?.type === 'Identifier') {
+      else if (
+        node.callee?.type === 'MemberExpression' &&
+        node.callee.property?.type === 'Identifier'
+      ) {
         receivingFuncName = node.callee.property.name;
       }
 
@@ -672,9 +723,17 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
             functionsPassedAsArgs.add(arg.name);
             interactions.functionReferences.push({
               functionName: arg.name,
-              context: ['addEventListener', 'removeEventListener', 'on', 'off', 'addListener', 'removeListener']
-                .includes(receivingFuncName) ? 'event-listener' : 'callback-arg',
-              receivingFunction: receivingFuncName
+              context: [
+                'addEventListener',
+                'removeEventListener',
+                'on',
+                'off',
+                'addListener',
+                'removeListener',
+              ].includes(receivingFuncName)
+                ? 'event-listener'
+                : 'callback-arg',
+              receivingFunction: receivingFuncName,
             });
           }
         }
@@ -693,12 +752,13 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
     }
 
     // Recursively search
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableNode = node as unknown as Record<string, unknown>;
+    Object.keys(node).forEach((key) => {
+      const value = indexableNode[key];
       if (Array.isArray(value)) {
-        value.forEach(findFunctionReferences);
-      } else if (value && typeof value === 'object' && value.type) {
-        findFunctionReferences(value);
+        value.forEach((child) => findFunctionReferences(child as t.Node | null | undefined));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        findFunctionReferences(value as t.Node);
       }
     });
   }
@@ -716,7 +776,7 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
   }
 
   // Create a simple traversal without @babel/traverse to avoid scope issues
-  function visitNode(node: any, parent?: any): void {
+  function visitNode(node: t.Node | null | undefined, parent?: t.Node | null): void {
     if (!node || typeof node !== 'object') return;
 
     ancestorStack.push(node);
@@ -733,26 +793,37 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
         if (isInsideAsyncCallback()) {
           interactions.deferredModifications.push(calleeName);
           // Also check for functional updates even in deferred context
-          if (node.arguments && node.arguments.length > 0 &&
-              (node.arguments[0].type === 'ArrowFunctionExpression' || node.arguments[0].type === 'FunctionExpression')) {
+          if (
+            node.arguments &&
+            node.arguments.length > 0 &&
+            (node.arguments[0].type === 'ArrowFunctionExpression' ||
+              node.arguments[0].type === 'FunctionExpression')
+          ) {
             interactions.functionalUpdates.push(calleeName);
           }
           // Skip further analysis - deferred modifications are safe
           ancestorStack.pop();
           // Still need to visit children
-          Object.keys(node).forEach(key => {
-            const value = node[key];
+          const indexableCallNode = node as unknown as Record<string, unknown>;
+          Object.keys(node).forEach((key) => {
+            const value = indexableCallNode[key];
             if (Array.isArray(value)) {
-              value.forEach(child => visitNode(child, node));
-            } else if (value && typeof value === 'object' && value.type) {
-              visitNode(value, node);
+              value.forEach((child) => visitNode(child as t.Node | null | undefined, node));
+            } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+              visitNode(value as t.Node, node);
             }
           });
           return;
         }
 
         // Enhanced: analyze the conditional guard if present
-        const guardAnalysis = analyzeConditionalGuard(node, ancestorStack, calleeName, stateVar, stateNames);
+        const guardAnalysis = analyzeConditionalGuard(
+          node,
+          ancestorStack,
+          calleeName,
+          stateVar,
+          stateNames
+        );
 
         if (guardAnalysis) {
           interactions.guardedModifications.push(guardAnalysis);
@@ -761,7 +832,7 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
           } else {
             interactions.conditionalModifications.push(calleeName);
           }
-        } else if (isInsideConditionalSimple(node, parent)) {
+        } else if (isInsideConditionalSimple(parent)) {
           // Fallback to old logic if we couldn't analyze the guard
           interactions.conditionalModifications.push(calleeName);
         } else {
@@ -769,8 +840,12 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
         }
 
         // Check if it's a functional update
-        if (node.arguments && node.arguments.length > 0 &&
-            (node.arguments[0].type === 'ArrowFunctionExpression' || node.arguments[0].type === 'FunctionExpression')) {
+        if (
+          node.arguments &&
+          node.arguments.length > 0 &&
+          (node.arguments[0].type === 'ArrowFunctionExpression' ||
+            node.arguments[0].type === 'FunctionExpression')
+        ) {
           interactions.functionalUpdates.push(calleeName);
         }
       }
@@ -793,12 +868,13 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
     }
 
     // Recursively visit all properties
-    Object.keys(node).forEach(key => {
-      const value = node[key];
+    const indexableVisitNode = node as unknown as Record<string, unknown>;
+    Object.keys(node).forEach((key) => {
+      const value = indexableVisitNode[key];
       if (Array.isArray(value)) {
-        value.forEach(child => visitNode(child, node));
-      } else if (value && typeof value === 'object' && value.type) {
-        visitNode(value, node);
+        value.forEach((child) => visitNode(child as t.Node | null | undefined, node));
+      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
+        visitNode(value as t.Node, node);
       }
     });
 
@@ -826,11 +902,11 @@ function analyzeStateInteractions(hookBody: t.Node, stateInfo: Map<string, strin
  * 3. Early return: `if (value === something) return; setValue(...)` - exits before setting
  */
 function analyzeConditionalGuard(
-  setterCall: any,
-  ancestorStack: any[],
+  setterCall: t.CallExpression,
+  ancestorStack: t.Node[],
   setterName: string,
   stateVar: string | undefined,
-  _allStateVars: string[]  // Reserved for future use
+  _allStateVars: string[] // Reserved for future use
 ): GuardedModification | null {
   if (!stateVar) return null;
 
@@ -848,7 +924,7 @@ function analyzeConditionalGuard(
           setter: setterName,
           stateVariable: stateVar,
           guardType: guardType.type,
-          isSafe: guardType.isSafe
+          isSafe: guardType.isSafe,
         };
       }
     }
@@ -861,7 +937,7 @@ function analyzeConditionalGuard(
           setter: setterName,
           stateVariable: stateVar,
           guardType: 'early-return',
-          isSafe: true
+          isSafe: true,
         };
       }
     }
@@ -874,10 +950,10 @@ function analyzeConditionalGuard(
  * Analyze if a condition creates a safe guard for state modification.
  */
 function analyzeCondition(
-  condition: any,
+  condition: t.Node | null | undefined,
   stateVar: string,
-  setterCall: any,
-  ifStatement: any
+  setterCall: t.CallExpression,
+  _ifStatement: t.IfStatement
 ): { type: GuardedModification['guardType']; isSafe: boolean; warning?: string } | null {
   if (!condition) return null;
 
@@ -906,8 +982,10 @@ function analyzeCondition(
     if (setterArg?.type === 'BooleanLiteral' && setterArg.value === false) {
       return { type: 'toggle-guard', isSafe: true };
     }
-    if (setterArg?.type === 'NullLiteral' ||
-        (setterArg?.type === 'Identifier' && setterArg.name === 'undefined')) {
+    if (
+      setterArg?.type === 'NullLiteral' ||
+      (setterArg?.type === 'Identifier' && setterArg.name === 'undefined')
+    ) {
       return { type: 'toggle-guard', isSafe: true };
     }
   }
@@ -927,11 +1005,13 @@ function analyzeCondition(
 
       // Check for PROPERTY equality guard with object spread risk
       // Pattern: if (user.id !== 5) setUser({ ...user, id: 5 })
-      const leftIsMemberOfState = left?.type === 'MemberExpression' &&
+      const leftIsMemberOfState =
+        left?.type === 'MemberExpression' &&
         left.object?.type === 'Identifier' &&
         left.object.name === stateVar;
 
-      const rightIsMemberOfState = right?.type === 'MemberExpression' &&
+      const rightIsMemberOfState =
+        right?.type === 'MemberExpression' &&
         right.object?.type === 'Identifier' &&
         right.object.name === stateVar;
 
@@ -943,9 +1023,10 @@ function analyzeCondition(
           return {
             type: 'object-spread-risk',
             isSafe: false,
-            warning: `Guard checks property of '${stateVar}' but setter creates new object reference. ` +
+            warning:
+              `Guard checks property of '${stateVar}' but setter creates new object reference. ` +
               `Even after the property matches, the object reference changes each render, ` +
-              `which may cause issues if other effects or memoized values depend on object identity.`
+              `which may cause issues if other effects or memoized values depend on object identity.`,
           };
         }
 
@@ -960,8 +1041,8 @@ function analyzeCondition(
   // Pattern 3: Logical AND with state check - `if (someCondition && !stateVar)`
   if (condition.type === 'LogicalExpression' && condition.operator === '&&') {
     // Recursively check both sides
-    const leftResult = analyzeCondition(condition.left, stateVar, setterCall, ifStatement);
-    const rightResult = analyzeCondition(condition.right, stateVar, setterCall, ifStatement);
+    const leftResult = analyzeCondition(condition.left, stateVar, setterCall, _ifStatement);
+    const rightResult = analyzeCondition(condition.right, stateVar, setterCall, _ifStatement);
 
     if (leftResult?.isSafe) return leftResult;
     if (rightResult?.isSafe) return rightResult;
@@ -978,8 +1059,8 @@ function analyzeCondition(
  * ```
  */
 function checkEarlyReturnPattern(
-  blockStatement: any,
-  setterCall: any,
+  blockStatement: t.BlockStatement,
+  setterCall: t.CallExpression,
   stateVar: string
 ): boolean {
   if (!blockStatement.body || !Array.isArray(blockStatement.body)) return false;
@@ -1002,10 +1083,10 @@ function checkEarlyReturnPattern(
     if (stmt.type === 'IfStatement') {
       // Check if it's `if (condition) return;`
       const hasReturn =
-        (stmt.consequent?.type === 'ReturnStatement') ||
+        stmt.consequent?.type === 'ReturnStatement' ||
         (stmt.consequent?.type === 'BlockStatement' &&
-         stmt.consequent.body?.length === 1 &&
-         stmt.consequent.body[0]?.type === 'ReturnStatement');
+          stmt.consequent.body?.length === 1 &&
+          stmt.consequent.body[0]?.type === 'ReturnStatement');
 
       if (hasReturn) {
         // Check if condition involves the state variable
@@ -1022,7 +1103,7 @@ function checkEarlyReturnPattern(
 /**
  * Check if a condition references a state variable
  */
-function conditionInvolvesState(condition: any, stateVar: string): boolean {
+function conditionInvolvesState(condition: t.Node | null | undefined, stateVar: string): boolean {
   if (!condition) return false;
 
   if (condition.type === 'Identifier' && condition.name === stateVar) {
@@ -1030,8 +1111,10 @@ function conditionInvolvesState(condition: any, stateVar: string): boolean {
   }
 
   if (condition.type === 'BinaryExpression' || condition.type === 'LogicalExpression') {
-    return conditionInvolvesState(condition.left, stateVar) ||
-           conditionInvolvesState(condition.right, stateVar);
+    return (
+      conditionInvolvesState(condition.left, stateVar) ||
+      conditionInvolvesState(condition.right, stateVar)
+    );
   }
 
   if (condition.type === 'UnaryExpression') {
@@ -1052,7 +1135,7 @@ function conditionInvolvesState(condition: any, stateVar: string): boolean {
  * - `{ ...user }`
  * - `Object.assign({}, user, { id: 5 })`
  */
-function usesObjectSpread(setterArg: any, stateVar: string): boolean {
+function usesObjectSpread(setterArg: t.Node | null | undefined, stateVar: string): boolean {
   if (!setterArg) return false;
 
   // Check for object expression with spread: { ...stateVar, ... }
@@ -1070,11 +1153,13 @@ function usesObjectSpread(setterArg: any, stateVar: string): boolean {
   // Check for Object.assign({}, stateVar, ...)
   if (setterArg.type === 'CallExpression') {
     const callee = setterArg.callee;
-    if (callee?.type === 'MemberExpression' &&
-        callee.object?.type === 'Identifier' &&
-        callee.object.name === 'Object' &&
-        callee.property?.type === 'Identifier' &&
-        callee.property.name === 'assign') {
+    if (
+      callee?.type === 'MemberExpression' &&
+      callee.object?.type === 'Identifier' &&
+      callee.object.name === 'Object' &&
+      callee.property?.type === 'Identifier' &&
+      callee.property.name === 'assign'
+    ) {
       // Check if any argument is the state variable
       for (const arg of setterArg.arguments || []) {
         if (arg.type === 'Identifier' && arg.name === stateVar) {
@@ -1101,37 +1186,40 @@ function usesObjectSpread(setterArg: any, stateVar: string): boolean {
 /**
  * Check if a node contains another node (by reference)
  */
-function containsNode(tree: any, target: any): boolean {
+function containsNode(tree: t.Node | null | undefined, target: t.Node): boolean {
   if (tree === target) return true;
   if (!tree || typeof tree !== 'object') return false;
 
+  const indexableTree = tree as unknown as Record<string, unknown>;
   for (const key of Object.keys(tree)) {
-    const value = tree[key];
+    const value = indexableTree[key];
     if (Array.isArray(value)) {
-      if (value.some(child => containsNode(child, target))) return true;
+      if (value.some((child) => containsNode(child as t.Node, target))) return true;
     } else if (value && typeof value === 'object') {
-      if (containsNode(value, target)) return true;
+      if (containsNode(value as t.Node, target)) return true;
     }
   }
 
   return false;
 }
 
-function isInsideConditionalSimple(_node: any, parent: any): boolean {
+function isInsideConditionalSimple(parent: t.Node | null | undefined): boolean {
   // Simple heuristic: check if we're inside an if statement block
   // This is a simplified version that looks for common conditional patterns
-  let current = parent;
-  
+  const current = parent;
+
   while (current) {
-    if (current.type === 'IfStatement' || 
-        current.type === 'ConditionalExpression' ||
-        current.type === 'LogicalExpression') {
+    if (
+      current.type === 'IfStatement' ||
+      current.type === 'ConditionalExpression' ||
+      current.type === 'LogicalExpression'
+    ) {
       return true;
     }
     // For simplicity, we'll only go up one level to avoid complexity
     break;
   }
-  
+
   return false;
 }
 
@@ -1148,8 +1236,7 @@ function isHookIgnored(fileContent: string, hookLine: number): boolean {
   // Check the hook's line for inline ignore comment
   if (hookLine > 0 && hookLine <= lines.length) {
     const currentLine = lines[hookLine - 1];
-    if (/\/\/\s*rcd-ignore\b/.test(currentLine) ||
-        /\/\*\s*rcd-ignore\s*\*\//.test(currentLine)) {
+    if (/\/\/\s*rcd-ignore\b/.test(currentLine) || /\/\*\s*rcd-ignore\s*\*\//.test(currentLine)) {
       return true;
     }
   }
@@ -1157,8 +1244,10 @@ function isHookIgnored(fileContent: string, hookLine: number): boolean {
   // Check the previous line for rcd-ignore-next-line
   if (hookLine > 1 && hookLine <= lines.length) {
     const previousLine = lines[hookLine - 2];
-    if (/\/\/\s*rcd-ignore-next-line\b/.test(previousLine) ||
-        /\/\*\s*rcd-ignore-next-line\s*\*\//.test(previousLine)) {
+    if (
+      /\/\/\s*rcd-ignore-next-line\b/.test(previousLine) ||
+      /\/\*\s*rcd-ignore-next-line\s*\*\//.test(previousLine)
+    ) {
       return true;
     }
   }
@@ -1193,6 +1282,6 @@ function createAnalysis(params: {
     confidence: params.confidence,
     explanation: params.explanation,
     actualStateModifications: params.actualStateModifications,
-    stateReads: params.stateReads
+    stateReads: params.stateReads,
   };
 }

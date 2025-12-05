@@ -5,26 +5,22 @@ import { transformData } from './utils';
 // context.tsx → utils.tsx → component.tsx → context.tsx
 
 interface MyContextType {
-  data: any;
-  updateData: (newData: any) => void;
+  data: Record<string, unknown> | null;
+  updateData: (newData: Record<string, unknown>) => void;
 }
 
 const MyContext = createContext<MyContextType | null>(null);
 
 export const MyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState<Record<string, unknown> | null>(null);
 
-  const updateData = useCallback((newData: any) => {
+  const updateData = useCallback((newData: Record<string, unknown>) => {
     // Use utility function that creates circular dependency
     const transformed = transformData(newData);
     setData(transformed);
   }, []);
 
-  return (
-    <MyContext.Provider value={{ data, updateData }}>
-      {children}
-    </MyContext.Provider>
-  );
+  return <MyContext.Provider value={{ data, updateData }}>{children}</MyContext.Provider>;
 };
 
 export const useMyContext = () => {

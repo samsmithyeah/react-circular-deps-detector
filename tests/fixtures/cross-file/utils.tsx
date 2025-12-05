@@ -3,7 +3,7 @@ import { MyComponent } from './component';
 // This utility file completes the circular dependency:
 // utils.tsx → component.tsx → context.tsx → utils.tsx
 
-export function processData(data: any) {
+export function processData<T extends Record<string, unknown>>(data: T) {
   return {
     ...data,
     processed: true,
@@ -11,15 +11,15 @@ export function processData(data: any) {
   };
 }
 
-export function validateInput(data: any): boolean {
-  return data && typeof data === 'object';
+export function validateInput(data: unknown): boolean {
+  return data !== null && typeof data === 'object';
 }
 
-export function transformData(data: any) {
+export function transformData<T extends Record<string, unknown>>(data: T) {
   // This creates a circular dependency by importing from component
   // which imports from context which imports from this file
   console.log('Transforming data with component type:', typeof MyComponent);
-  
+
   return {
     ...data,
     transformed: true,

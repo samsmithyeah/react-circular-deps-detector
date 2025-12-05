@@ -1,14 +1,18 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 
+interface DataType {
+  [key: string]: unknown;
+}
+
 // Test fixture with proper hooks usage (should not trigger any warnings)
 export const CleanHooksExample: React.FC = () => {
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DataType | null>(null);
 
   // Clean pattern 1: useCallback that doesn't modify its dependencies
   const incrementCount = useCallback(() => {
-    setCount(prev => prev + 1); // Uses previous value, doesn't depend on count
+    setCount((prev) => prev + 1); // Uses previous value, doesn't depend on count
   }, []); // No dependencies
 
   // Clean pattern 2: useCallback with stable dependencies
@@ -37,7 +41,7 @@ export const CleanHooksExample: React.FC = () => {
 
   // Clean pattern 5: useCallback that modifies different state
   const toggleLoading = useCallback(() => {
-    setLoading(prev => !prev); // Modifies loading but doesn't depend on it
+    setLoading((prev) => !prev); // Modifies loading but doesn't depend on it
   }, []); // No dependencies
 
   // Clean pattern 6: useEffect that doesn't depend on functions it calls
