@@ -1,0 +1,56 @@
+{
+  "name": "eslint-plugin-react-loop-detector",
+  "version": "1.0.0",
+  "description": "ESLint plugin to detect infinite re-render risks in React hooks",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin",
+    "react",
+    "hooks",
+    "infinite-loop",
+    "re-render",
+    "useEffect",
+    "useCallback",
+    "useMemo"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "eslint": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@types/eslint": "^9.6.1",
+    "@types/estree": "^1.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.3",
+    "@typescript-eslint/rule-tester": "^8.48.1",
+    "eslint": "^9.39.1",
+    "jest": "^30.0.1",
+    "ts-jest": "^29.4.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@typescript-eslint/utils": "^8.33.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samsmithyeah/react-circular-deps-detector.git",
+    "directory": "eslint-plugin"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

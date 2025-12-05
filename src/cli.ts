@@ -24,6 +24,8 @@ interface CliOptions {
   minConfidence?: 'high' | 'medium' | 'low';
   confirmedOnly?: boolean;
   cache?: boolean;
+  strict?: boolean;
+  tsconfigPath?: string;
 }
 
 // SARIF output types
@@ -314,6 +316,11 @@ program
   .option('--min-confidence <level>', 'Minimum confidence to report (high, medium, low)', 'low')
   .option('--confirmed-only', 'Only report confirmed infinite loops (not potential issues)')
   .option('--cache', 'Enable caching for faster repeated runs')
+  .option(
+    '--strict',
+    'Enable TypeScript strict mode for type-based stability detection (slower but more accurate)'
+  )
+  .option('--tsconfig <path>', 'Path to tsconfig.json (for --strict mode)')
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -330,9 +337,14 @@ program
         process.exit(1);
       }
 
-      if (!options.json) {
+      if (!options.json && !options.sarif) {
         console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
         console.log(chalk.gray(`Pattern: ${options.pattern}`));
+        if (options.strict) {
+          console.log(
+            chalk.yellow(`Strict mode enabled: Using TypeScript compiler for type-based analysis`)
+          );
+        }
       }
 
       const results = await detectCircularDependencies(absolutePath, {
@@ -342,10 +354,14 @@ program
         debug: options.debug,
         parallel: options.parallel,
         workers: options.workers,
+        strict: options.strict,
+        tsconfigPath: options.tsconfigPath,
         config: {
           minSeverity: options.minSeverity,
           minConfidence: options.minConfidence,
           includePotentialIssues: !options.confirmedOnly,
+          strictMode: options.strict,
+          tsconfigPath: options.tsconfigPath,
         },
       });
 

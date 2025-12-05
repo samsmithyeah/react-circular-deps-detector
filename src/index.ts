@@ -59,3 +59,12 @@ export { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analy
 
 // Module graph
 export { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
+
+// Type checker (for strict mode)
+export {
+  TypeChecker,
+  createTypeChecker,
+  isTypeScriptProject,
+  TypeInfo,
+  TypeCheckerOptions,
+} from './type-checker';

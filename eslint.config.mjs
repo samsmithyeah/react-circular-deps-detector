@@ -26,6 +26,8 @@ export default tseslint.config(
       'test-indirect-update.tsx',
       'test-indirect-utils.ts',
       'debug-test.js',
+      'eslint-plugin/dist/',
+      'eslint-plugin/tests/',
     ],
   },
   {
