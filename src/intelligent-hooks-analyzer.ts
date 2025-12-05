@@ -282,12 +282,14 @@ function extractStateInfo(ast: t.Node) {
 
   traverse(ast, {
     VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
-      // Extract useState patterns: const [state, setState] = useState(...)
+      // Extract useState/useReducer patterns: const [state, setState] = useState(...)
+      // or const [state, dispatch] = useReducer(...)
       if (
         t.isArrayPattern(nodePath.node.id) &&
         t.isCallExpression(nodePath.node.init) &&
         t.isIdentifier(nodePath.node.init.callee) &&
-        nodePath.node.init.callee.name === 'useState'
+        (nodePath.node.init.callee.name === 'useState' ||
+          nodePath.node.init.callee.name === 'useReducer')
       ) {
         const elements = nodePath.node.id.elements;
         if (elements.length >= 2 && t.isIdentifier(elements[0]) && t.isIdentifier(elements[1])) {
@@ -517,11 +519,11 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
 
       // Handle array destructuring: const [a, b] = ... or const [a, [b, c]] = ...
       if (t.isArrayPattern(id)) {
-        // Track array destructuring from useState - these are stable
+        // Track array destructuring from useState/useReducer - these are stable
         if (
           t.isCallExpression(init) &&
           t.isIdentifier(init.callee) &&
-          init.callee.name === 'useState'
+          (init.callee.name === 'useState' || init.callee.name === 'useReducer')
         ) {
           // Use recursive extraction to handle all identifiers
           for (const name of extractIdentifiersFromPattern(id)) {
@@ -608,11 +610,11 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
       if (!t.isIdentifier(id)) return;
       const varName = id.name;
 
-      // Check if this is a useState call - track state variables
+      // Check if this is a useState/useReducer call - track state variables
       if (
         t.isCallExpression(init) &&
         t.isIdentifier(init.callee) &&
-        init.callee.name === 'useState'
+        (init.callee.name === 'useState' || init.callee.name === 'useReducer')
       ) {
         stateVars.add(varName);
         return;
