@@ -576,17 +576,8 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           t.isIdentifier(init.callee) &&
           init.callee.name === 'useContext'
         ) {
-          const properties = id.properties;
-          const extractedNames: string[] = [];
-
-          // Collect all destructured names
-          for (const prop of properties) {
-            if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
-              extractedNames.push(prop.value.name);
-            } else if (t.isObjectProperty(prop) && t.isIdentifier(prop.key)) {
-              extractedNames.push(prop.key.name);
-            }
-          }
+          // Use extractIdentifiersFromPattern to handle all destructuring cases including nested
+          const extractedNames = extractIdentifiersFromPattern(id);
 
           // Mark state variables (those with matching setters) as stable
           for (const name of extractedNames) {
