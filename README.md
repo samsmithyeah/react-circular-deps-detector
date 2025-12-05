@@ -234,7 +234,7 @@ Create a config file in your project root. Supported formats:
 | `--min-severity <level>` | Minimum severity: `high`, `medium`, `low` |
 | `--min-confidence <level>` | Minimum confidence: `high`, `medium`, `low` |
 | `--confirmed-only` | Only report confirmed infinite loops |
-| `--cache` | Enable AST caching for faster runs |
+| `--cache` | Enable AST caching for faster runs. Disables parallel processing. |
 
 ### Commands
 
