@@ -36,8 +36,8 @@ describe('CLI Hooks Output', () => {
         const output = execError.stdout || '';
 
         expect(output).toContain('CONFIRMED infinite loop');
-        expect(output).toContain('GUARANTEED infinite re-render');
-        expect(output).toContain('high severity');
+        expect(output).toContain('CRITICAL - Infinite re-render');
+        expect(output).toContain('Severity: high');
         expect(output).toContain('hooks-dependency-loop.tsx');
       }
     });
@@ -208,7 +208,7 @@ describe('CLI Hooks Output', () => {
         const output = execError.stdout || '';
 
         // Should contain severity indicators
-        expect(output).toContain('high severity');
+        expect(output).toContain('Severity: high');
         // Color codes might be stripped in test environment, but structure should be there
       }
     });

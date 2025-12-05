@@ -12,11 +12,87 @@ interface HookNodeInfo {
   line: number;
 }
 
+/**
+ * Error codes for categorizing issues.
+ * - RLD-1XX: Critical issues that will crash the browser (synchronous/render-phase loops)
+ * - RLD-2XX: Critical issues from effect loops (useEffect/useLayoutEffect)
+ * - RLD-3XX: Warning-level cross-file risks
+ * - RLD-4XX: Performance issues (unstable references)
+ * - RLD-5XX: Performance issues (missing dependencies)
+ * - RLD-6XX: Ref mutation issues
+ */
+export type ErrorCode =
+  | 'RLD-100' // Render phase setState (synchronous loop)
+  | 'RLD-101' // Render phase setState via function call
+  | 'RLD-200' // useEffect unconditional setState loop
+  | 'RLD-201' // useEffect missing deps with setState
+  | 'RLD-202' // useLayoutEffect unconditional setState loop
+  | 'RLD-300' // Cross-file loop risk
+  | 'RLD-301' // Cross-file conditional modification
+  | 'RLD-400' // Unstable object reference in deps
+  | 'RLD-401' // Unstable array reference in deps
+  | 'RLD-402' // Unstable function reference in deps
+  | 'RLD-403' // Unstable function call result in deps
+  | 'RLD-410' // Object spread guard risk
+  | 'RLD-420' // useCallback/useMemo modifies dependency (no direct loop but review)
+  | 'RLD-500' // useEffect missing dependency array
+  | 'RLD-501' // Conditional modification needs review
+  | 'RLD-600'; // Ref mutation with state value (stale closure risk)
+
+/**
+ * Issue categories for filtering and display.
+ * - critical: Will crash the browser (infinite loops)
+ * - warning: May cause logic bugs or race conditions
+ * - performance: Causes unnecessary re-renders (lag)
+ * - safe: Safe pattern (informational only)
+ */
+export type IssueCategory = 'critical' | 'warning' | 'performance' | 'safe';
+
+/** Debug information about why a decision was made */
+export interface DebugInfo {
+  /** Why this issue was flagged */
+  reason: string;
+  /** State tracking information */
+  stateTracking?: {
+    declaredStateVars: string[];
+    setterFunctions: string[];
+    stableVariables: string[];
+    unstableVariables: string[];
+  };
+  /** Dependency analysis */
+  dependencyAnalysis?: {
+    rawDependencies: string[];
+    problematicDeps: string[];
+    safeDeps: string[];
+  };
+  /** Guard detection */
+  guardInfo?: {
+    hasGuard: boolean;
+    guardType?: string;
+    guardVariable?: string;
+  };
+  /** Deferred modification detection */
+  deferredInfo?: {
+    isDeferred: boolean;
+    deferredContext?: string;
+  };
+  /** Cross-file analysis */
+  crossFileInfo?: {
+    analyzedImports: string[];
+    foundStateModifications: string[];
+  };
+}
+
 export interface IntelligentHookAnalysis {
   type: 'confirmed-infinite-loop' | 'potential-issue' | 'safe-pattern';
+  /** Stable error code for filtering and ignoring specific issue types */
+  errorCode: ErrorCode;
+  /** Issue category for grouping and filtering */
+  category: IssueCategory;
   description: string;
   file: string;
   line: number;
+  column?: number;
   hookType: string;
   functionName?: string;
   problematicDependency: string;
@@ -27,6 +103,8 @@ export interface IntelligentHookAnalysis {
   explanation: string;
   actualStateModifications: string[];
   stateReads: string[];
+  /** Debug information (only populated when debug mode is enabled) */
+  debugInfo?: DebugInfo;
 }
 
 /** Information about a local variable that may be recreated on each render */
@@ -51,6 +129,18 @@ interface StateInteraction {
   guardedModifications: GuardedModification[];
   // Track functions passed as references (not invoked) - e.g., addEventListener('click', handleClick)
   functionReferences: FunctionReference[];
+  /** Track ref.current mutations - e.g., ref.current = value */
+  refMutations: RefMutation[];
+}
+
+interface RefMutation {
+  refName: string;
+  /** The value being assigned (if it's an identifier) */
+  assignedValue?: string;
+  /** Whether the mutation uses a state variable */
+  usesStateValue: boolean;
+  /** Line number of the mutation */
+  line: number;
 }
 
 interface FunctionReference {
@@ -311,10 +401,13 @@ function checkComponentBodyForSetState(
       results.push(
         createAnalysis({
           type: 'confirmed-infinite-loop',
+          errorCode: 'RLD-100',
+          category: 'critical',
           severity: 'high',
           confidence: 'high',
           hookType: 'render',
           line,
+          column: callPath.node.loc?.start.column,
           file: filePath,
           problematicDependency: stateVar,
           stateVariable: stateVar,
@@ -548,6 +641,8 @@ function detectUseEffectWithoutDeps(
         results.push(
           createAnalysis({
             type: 'confirmed-infinite-loop',
+            errorCode: 'RLD-201',
+            category: 'critical',
             severity: 'high',
             confidence: isIndirect ? 'medium' : 'high',
             hookType: hookName,
@@ -574,8 +669,43 @@ function detectUseEffectWithoutDeps(
   return results;
 }
 
-export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): IntelligentHookAnalysis[] {
+/** Options for intelligent hooks analysis */
+export interface AnalyzerOptions {
+  /** Hooks known to return stable references */
+  stableHooks?: string[];
+  /** Hooks known to return unstable references */
+  unstableHooks?: string[];
+  /** Custom function stability settings */
+  customFunctions?: Record<
+    string,
+    {
+      stable?: boolean;
+      deferred?: boolean;
+    }
+  >;
+  /** Enable debug mode to collect detailed decision information */
+  debug?: boolean;
+}
+
+/**
+ * Module-level options storage for helper functions.
+ *
+ * Note: This is intentional - the analyzer runs synchronously in a single thread,
+ * and options are reset at the start of each analyzeHooksIntelligently() call.
+ * While passing options through the call chain would be more pure, the current
+ * approach avoids threading options through 10+ function calls for a simple
+ * config lookup. The tradeoff is acceptable since the analyzer is not concurrent.
+ */
+let currentOptions: AnalyzerOptions = {};
+
+export function analyzeHooksIntelligently(
+  parsedFiles: ParsedFile[],
+  options: AnalyzerOptions = {}
+): IntelligentHookAnalysis[] {
   const results: IntelligentHookAnalysis[] = [];
+
+  // Store options for helper functions
+  currentOptions = options;
 
   // First, build cross-file analysis including imported utilities
   // Only show progress if not in test mode and not generating JSON output
@@ -597,6 +727,36 @@ export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): Intelligen
   return results;
 }
 
+/**
+ * Check if a hook is configured as stable via options
+ */
+export function isConfiguredStableHook(hookName: string): boolean {
+  return currentOptions.stableHooks?.includes(hookName) ?? false;
+}
+
+/**
+ * Check if a hook is configured as unstable via options
+ */
+export function isConfiguredUnstableHook(hookName: string): boolean {
+  return currentOptions.unstableHooks?.includes(hookName) ?? false;
+}
+
+/**
+ * Check if a function is configured as stable via options
+ * Reserved for future use when customFunctions config is fully integrated
+ */
+export function isConfiguredStableFunction(functionName: string): boolean {
+  return currentOptions.customFunctions?.[functionName]?.stable ?? false;
+}
+
+/**
+ * Check if a function is configured as deferred (async) via options
+ * Reserved for future use when customFunctions config is fully integrated
+ */
+export function isConfiguredDeferredFunction(functionName: string): boolean {
+  return currentOptions.customFunctions?.[functionName]?.deferred ?? false;
+}
+
 function analyzeFileIntelligently(
   file: ParsedFile,
   crossFileAnalysis: CrossFileAnalysis
@@ -607,8 +767,8 @@ function analyzeFileIntelligently(
     // Use the cached AST from ParsedFile instead of re-parsing
     const ast = file.ast;
 
-    // Extract state variables and their setters
-    const stateInfo = extractStateInfo(ast);
+    // Extract state variables, their setters, and ref variables
+    const { stateVariables: stateInfo, refVariables: refVars } = extractStateInfo(ast);
 
     // Extract unstable local variables (objects, arrays, functions created in component body)
     const unstableVars = extractUnstableVariables(ast);
@@ -643,7 +803,8 @@ function analyzeFileIntelligently(
         stateInfo,
         file.file,
         crossFileAnalysis,
-        file.content
+        file.content,
+        refVars
       );
       if (analysis) {
         results.push(analysis);
@@ -656,11 +817,26 @@ function analyzeFileIntelligently(
   return results;
 }
 
-function extractStateInfo(ast: t.Node) {
+interface StateAndRefInfo {
+  stateVariables: Map<string, string>; // state var -> setter name
+  refVariables: Set<string>; // ref variable names
+}
+
+function extractStateInfo(ast: t.Node): StateAndRefInfo {
   const stateVariables = new Map<string, string>(); // state var -> setter name
+  const refVariables = new Set<string>(); // ref variable names
 
   traverse(ast, {
     VariableDeclarator(nodePath: NodePath<t.VariableDeclarator>) {
+      // Extract useRef patterns: const myRef = useRef(...)
+      if (
+        t.isIdentifier(nodePath.node.id) &&
+        t.isCallExpression(nodePath.node.init) &&
+        t.isIdentifier(nodePath.node.init.callee) &&
+        nodePath.node.init.callee.name === 'useRef'
+      ) {
+        refVariables.add(nodePath.node.id.name);
+      }
       // Extract useState/useReducer patterns: const [state, setState] = useState(...)
       // or const [state, dispatch] = useReducer(...)
       if (
@@ -737,7 +913,7 @@ function extractStateInfo(ast: t.Node) {
     },
   });
 
-  return stateVariables;
+  return { stateVariables, refVariables };
 }
 
 /** Function calls that return stable/primitive values */
@@ -874,6 +1050,18 @@ function isStableFunctionCall(init: t.CallExpression): boolean {
     return true;
   }
 
+  // Check for user-configured stable/unstable hooks first
+  if (t.isIdentifier(callee)) {
+    // If explicitly marked as unstable in config, return false
+    if (isConfiguredUnstableHook(callee.name)) {
+      return false;
+    }
+    // If explicitly marked as stable in config, return true
+    if (isConfiguredStableHook(callee.name)) {
+      return true;
+    }
+  }
+
   // Custom hooks (use* prefix) are treated as stable by default
   // Rationale: Most custom hooks in real apps either:
   // 1. Return values from state management (Zustand, Redux, etc.) - stable references
@@ -936,7 +1124,7 @@ function extractIdentifiersFromPattern(pattern: t.LVal): string[] {
     identifiers.push(pattern.name);
   } else if (t.isArrayPattern(pattern)) {
     for (const element of pattern.elements) {
-      if (element) {
+      if (element && t.isLVal(element)) {
         identifiers.push(...extractIdentifiersFromPattern(element));
       }
     }
@@ -1608,9 +1796,19 @@ function checkUnstableReferences(
       // - If useCallback/useMemo: potential issue (medium severity) - unnecessary re-creation
       const isConfirmedLoop = isUseEffect && hasUnconditionalStateUpdate;
 
+      // Determine error code based on unstable variable type
+      const unstableTypeToErrorCode: Record<UnstableVariable['type'], ErrorCode> = {
+        object: 'RLD-400',
+        array: 'RLD-401',
+        function: 'RLD-402',
+        'function-call': 'RLD-403',
+      };
+
       return createAnalysis({
         type: isConfirmedLoop ? 'confirmed-infinite-loop' : 'potential-issue',
-        severity: isConfirmedLoop ? 'high' : 'medium',
+        errorCode: isConfirmedLoop ? 'RLD-200' : unstableTypeToErrorCode[unstableVar.type],
+        category: isConfirmedLoop ? 'critical' : 'performance',
+        severity: isConfirmedLoop ? 'high' : 'low',
         confidence: 'high',
         hookType: hookName,
         line,
@@ -1633,6 +1831,24 @@ function checkUnstableReferences(
             : `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
               `It gets a new reference on every render, causing unnecessary ${hookName} re-creation. ` +
               `Fix: wrap with useMemo/useCallback or move outside the component.`,
+        debugInfo: {
+          reason: `Detected unstable ${unstableVar.type} '${depName}' in dependency array`,
+          stateTracking: {
+            declaredStateVars: Array.from(stateInfo.keys()),
+            setterFunctions: Array.from(stateInfo.values()),
+            stableVariables: [],
+            unstableVariables: Array.from(unstableVars.keys()),
+          },
+          dependencyAnalysis: {
+            rawDependencies: depsArray.elements
+              .filter((el): el is t.Identifier => t.isIdentifier(el))
+              .map((el) => el.name),
+            problematicDeps: [depName],
+            safeDeps: depsArray.elements
+              .filter((el): el is t.Identifier => t.isIdentifier(el) && el.name !== depName)
+              .map((el) => el.name),
+          },
+        },
       });
     }
   }
@@ -1666,7 +1882,8 @@ function analyzeHookNode(
   stateInfo: Map<string, string>,
   filePath: string,
   crossFileAnalysis: CrossFileAnalysis,
-  fileContent?: string
+  fileContent?: string,
+  refVars: Set<string> = new Set()
 ): IntelligentHookAnalysis | null {
   const { node, hookName, line } = hookNode;
 
@@ -1691,7 +1908,7 @@ function analyzeHookNode(
 
   // Analyze hook body for state interactions
   const hookBody = node.arguments[0];
-  const stateInteractions = analyzeStateInteractions(hookBody, stateInfo);
+  const stateInteractions = analyzeStateInteractions(hookBody, stateInfo, refVars);
 
   // Check cross-file modifications for this hook
   const hookId = `${filePath}:${line}:${hookName}`;
@@ -1723,6 +1940,8 @@ function analyzeHookNode(
         // This modification is safely guarded - not a problem
         return createAnalysis({
           type: 'safe-pattern',
+          errorCode: 'RLD-200', // Safe pattern, but we use the base code for categorization
+          category: 'safe',
           severity: 'low',
           confidence: 'high',
           hookType: hookName,
@@ -1741,6 +1960,8 @@ function analyzeHookNode(
       if (guardedMod.guardType === 'object-spread-risk') {
         return createAnalysis({
           type: 'potential-issue',
+          errorCode: 'RLD-410',
+          category: 'warning',
           severity: 'medium',
           confidence: 'medium',
           hookType: hookName,
@@ -1768,6 +1989,8 @@ function analyzeHookNode(
       // it's safe because the function won't be invoked synchronously during effect execution
       return createAnalysis({
         type: 'safe-pattern',
+        errorCode: 'RLD-200',
+        category: 'safe',
         severity: 'low',
         confidence: 'high',
         hookType: hookName,
@@ -1787,6 +2010,8 @@ function analyzeHookNode(
     if (stateInteractions.deferredModifications.includes(setter)) {
       return createAnalysis({
         type: 'safe-pattern',
+        errorCode: 'RLD-200',
+        category: 'safe',
         severity: 'low',
         confidence: 'high',
         hookType: hookName,
@@ -1804,8 +2029,12 @@ function analyzeHookNode(
     // Check direct modifications
     if (stateInteractions.modifications.includes(setter)) {
       if (canCauseDirectLoop) {
+        // Determine if it's useEffect or useLayoutEffect for the error code
+        const effectErrorCode: ErrorCode = hookName === 'useLayoutEffect' ? 'RLD-202' : 'RLD-200';
         return createAnalysis({
           type: 'confirmed-infinite-loop',
+          errorCode: effectErrorCode,
+          category: 'critical',
           severity: 'high',
           confidence: 'high',
           hookType: hookName,
@@ -1817,6 +2046,26 @@ function analyzeHookNode(
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
           explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`,
+          debugInfo: {
+            reason: `Direct state modification: ${hookName} depends on '${dep}' and calls '${setter}()' unconditionally`,
+            stateTracking: {
+              declaredStateVars: Array.from(stateInfo.keys()),
+              setterFunctions: Array.from(stateInfo.values()),
+              stableVariables: [],
+              unstableVariables: [],
+            },
+            dependencyAnalysis: {
+              rawDependencies: dependencies,
+              problematicDeps: [dep],
+              safeDeps: dependencies.filter((d) => d !== dep),
+            },
+            guardInfo: {
+              hasGuard: false,
+            },
+            deferredInfo: {
+              isDeferred: false,
+            },
+          },
         });
       } else {
         // useCallback/useMemo - can't cause loops directly
@@ -1827,6 +2076,8 @@ function analyzeHookNode(
         // Only warn if it's NOT using functional updater (reads dep value directly)
         return createAnalysis({
           type: 'potential-issue',
+          errorCode: 'RLD-420',
+          category: 'warning',
           severity: 'low',
           confidence: 'medium',
           hookType: hookName,
@@ -1847,6 +2098,8 @@ function analyzeHookNode(
       if (canCauseDirectLoop) {
         return createAnalysis({
           type: 'confirmed-infinite-loop',
+          errorCode: 'RLD-300',
+          category: 'critical',
           severity: 'high',
           confidence: 'high',
           hookType: hookName,
@@ -1862,6 +2115,8 @@ function analyzeHookNode(
       } else {
         return createAnalysis({
           type: 'potential-issue',
+          errorCode: 'RLD-301',
+          category: 'warning',
           severity: 'low',
           confidence: 'medium',
           hookType: hookName,
@@ -1882,6 +2137,8 @@ function analyzeHookNode(
       if (canCauseDirectLoop) {
         return createAnalysis({
           type: 'potential-issue',
+          errorCode: 'RLD-501',
+          category: 'warning',
           severity: 'medium',
           confidence: 'medium',
           hookType: hookName,
@@ -1900,26 +2157,54 @@ function analyzeHookNode(
       }
     }
 
-    // Only reads state, doesn't modify - this is safe!
-    if (
-      stateInteractions.reads.includes(dep) &&
-      !stateInteractions.modifications.includes(setter) &&
-      !crossFileModifications.includes(setter)
-    ) {
-      return createAnalysis({
-        type: 'safe-pattern',
-        severity: 'low',
-        confidence: 'high',
-        hookType: hookName,
-        line,
-        file: filePath,
-        problematicDependency: dep,
-        stateVariable: dep,
-        setterFunction: setter,
-        actualStateModifications: [],
-        stateReads: stateInteractions.reads,
-        explanation: `Hook only reads from '${dep}' without modifying it - this pattern is safe.`,
-      });
+    // Only reads state, doesn't modify - don't return early, continue checking other deps
+  }
+
+  // Check for ref mutations that store state values - potential stale closure issues
+  // This is a lower-priority warning as refs don't cause re-renders, but storing
+  // state in refs can lead to stale data if not used carefully
+  if (stateInteractions.refMutations.length > 0 && canCauseDirectLoop) {
+    for (const refMutation of stateInteractions.refMutations) {
+      if (refMutation.usesStateValue) {
+        // Check if this ref is also read in the dependencies
+        const refInDeps = dependencies.some(
+          (dep) => dep === refMutation.refName || dep.includes(refMutation.refName)
+        );
+
+        if (refInDeps) {
+          // Ref is both mutated with state value AND in dependencies - potential loop
+          return createAnalysis({
+            type: 'potential-issue',
+            errorCode: 'RLD-600',
+            category: 'warning',
+            severity: 'low',
+            confidence: 'low',
+            hookType: hookName,
+            line: refMutation.line,
+            file: filePath,
+            problematicDependency: refMutation.refName,
+            stateVariable: refMutation.assignedValue || 'state',
+            setterFunction: 'ref.current =',
+            actualStateModifications: [],
+            stateReads: stateInteractions.reads,
+            explanation: `${hookName} mutates '${refMutation.refName}.current' with state value while depending on the ref. This can cause stale closure issues.`,
+            debugInfo: {
+              reason: `Ref '${refMutation.refName}' is mutated with state value '${refMutation.assignedValue}' and appears in dependencies`,
+              stateTracking: {
+                declaredStateVars: Array.from(stateInfo.keys()),
+                setterFunctions: Array.from(stateInfo.values()),
+                stableVariables: [],
+                unstableVariables: [],
+              },
+              dependencyAnalysis: {
+                rawDependencies: dependencies,
+                problematicDeps: [refMutation.refName],
+                safeDeps: dependencies.filter((d) => d !== refMutation.refName),
+              },
+            },
+          });
+        }
+      }
     }
   }
 
@@ -1928,7 +2213,8 @@ function analyzeHookNode(
 
 function analyzeStateInteractions(
   hookBody: t.Node,
-  stateInfo: Map<string, string>
+  stateInfo: Map<string, string>,
+  refVars: Set<string> = new Set()
 ): StateInteraction {
   const interactions: StateInteraction = {
     reads: [],
@@ -1938,6 +2224,7 @@ function analyzeStateInteractions(
     deferredModifications: [],
     guardedModifications: [],
     functionReferences: [],
+    refMutations: [],
   };
 
   const setterNames = Array.from(stateInfo.values());
@@ -2173,6 +2460,60 @@ function analyzeStateInteractions(
       if (!parent || parent.type !== 'AssignmentExpression' || parent.left !== node) {
         interactions.reads.push(node.name);
       }
+    }
+
+    // Check for ref.current mutations (e.g., ref.current = value)
+    if (
+      node.type === 'AssignmentExpression' &&
+      node.left &&
+      node.left.type === 'MemberExpression' &&
+      node.left.object &&
+      node.left.object.type === 'Identifier' &&
+      node.left.property &&
+      node.left.property.type === 'Identifier' &&
+      node.left.property.name === 'current' &&
+      refVars.has(node.left.object.name)
+    ) {
+      const refName = node.left.object.name;
+      const rightSide = node.right;
+
+      // Check if the assigned value is a state variable
+      let assignedValue: string | undefined;
+      let usesStateValue = false;
+
+      if (rightSide.type === 'Identifier') {
+        assignedValue = rightSide.name;
+        usesStateValue = stateNames.includes(rightSide.name);
+      } else {
+        // Check if any identifier in the right side is a state variable
+        const checkForStateVars = (n: t.Node): boolean => {
+          if (n.type === 'Identifier' && stateNames.includes(n.name)) {
+            return true;
+          }
+          const indexable = n as unknown as Record<string, unknown>;
+          for (const key of Object.keys(n)) {
+            const val = indexable[key];
+            if (Array.isArray(val)) {
+              for (const child of val) {
+                if (child && typeof child === 'object' && (child as { type?: string }).type) {
+                  if (checkForStateVars(child as t.Node)) return true;
+                }
+              }
+            } else if (val && typeof val === 'object' && (val as { type?: string }).type) {
+              if (checkForStateVars(val as t.Node)) return true;
+            }
+          }
+          return false;
+        };
+        usesStateValue = checkForStateVars(rightSide);
+      }
+
+      interactions.refMutations.push({
+        refName,
+        assignedValue,
+        usesStateValue,
+        line: node.loc?.start.line || 0,
+      });
     }
 
     // Recursively visit all properties
@@ -2565,10 +2906,13 @@ function isHookIgnored(fileContent: string, hookLine: number): boolean {
 
 function createAnalysis(params: {
   type: IntelligentHookAnalysis['type'];
+  errorCode: ErrorCode;
+  category: IssueCategory;
   severity: IntelligentHookAnalysis['severity'];
   confidence: IntelligentHookAnalysis['confidence'];
   hookType: string;
   line: number;
+  column?: number;
   file: string;
   problematicDependency: string;
   stateVariable?: string;
@@ -2576,12 +2920,16 @@ function createAnalysis(params: {
   actualStateModifications: string[];
   stateReads: string[];
   explanation: string;
+  debugInfo?: DebugInfo;
 }): IntelligentHookAnalysis {
-  return {
+  const result: IntelligentHookAnalysis = {
     type: params.type,
+    errorCode: params.errorCode,
+    category: params.category,
     description: `${params.hookType} ${params.type.replace('-', ' ')}`,
     file: params.file,
     line: params.line,
+    column: params.column,
     hookType: params.hookType,
     problematicDependency: params.problematicDependency,
     stateVariable: params.stateVariable,
@@ -2592,4 +2940,11 @@ function createAnalysis(params: {
     actualStateModifications: params.actualStateModifications,
     stateReads: params.stateReads,
   };
+
+  // Only include debug info if debug mode is enabled
+  if (currentOptions.debug && params.debugInfo) {
+    result.debugInfo = params.debugInfo;
+  }
+
+  return result;
 }

@@ -2,6 +2,7 @@ import * as parser from '@babel/parser';
 import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import * as fs from 'fs';
+import { AstCache, CacheableParsedData } from './cache';
 
 export interface HookInfo {
   name: string;
@@ -129,6 +130,63 @@ export function parseFile(filePath: string): ParsedFile {
   });
 
   return { file: filePath, hooks, variables, imports, exports, functions, contexts, ast, content };
+}
+
+/**
+ * Parse file with caching support for improved performance
+ * @param filePath Path to the file
+ * @param cache Optional cache instance for storing/retrieving parsed data
+ */
+export function parseFileWithCache(filePath: string, cache?: AstCache): ParsedFile {
+  // Try to get cached data
+  if (cache) {
+    const cached = cache.get(filePath);
+    if (cached) {
+      // Reconstruct ParsedFile from cached data
+      // We still need to parse the AST for hooks analysis, but we can skip expensive traversals
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const ast = parser.parse(content, {
+        sourceType: 'module',
+        plugins: ['jsx', 'typescript'],
+      });
+
+      // Convert cached variables back to Map<string, Set<string>>
+      const variables = new Map<string, Set<string>>();
+      for (const [key, values] of cached.variables) {
+        variables.set(key, new Set(values));
+      }
+
+      return {
+        file: filePath,
+        hooks: cached.hooks,
+        variables,
+        imports: cached.imports,
+        exports: cached.exports,
+        functions: new Set(cached.functions),
+        contexts: new Set(cached.contexts),
+        ast,
+        content,
+      };
+    }
+  }
+
+  // Parse file normally
+  const result = parseFile(filePath);
+
+  // Cache the result
+  if (cache) {
+    const cacheableData: CacheableParsedData = {
+      hooks: result.hooks,
+      imports: result.imports,
+      exports: result.exports,
+      functions: Array.from(result.functions),
+      contexts: Array.from(result.contexts),
+      variables: Array.from(result.variables.entries()).map(([k, v]) => [k, Array.from(v)]),
+    };
+    cache.set(filePath, cacheableData);
+  }
+
+  return result;
 }
 
 function extractHookInfo(

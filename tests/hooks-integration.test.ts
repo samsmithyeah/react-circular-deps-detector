@@ -11,10 +11,10 @@ describe('Hooks Integration Tests', () => {
         ignore: [],
       });
 
-      expect(results).toHaveProperty('improvedHooksLoops');
-      expect(results.improvedHooksLoops.length).toBeGreaterThan(0);
+      expect(results).toHaveProperty('intelligentHooksAnalysis');
+      expect(results.intelligentHooksAnalysis.length).toBeGreaterThan(0);
 
-      expect(results.summary.improvedHooksLoops).toBeGreaterThan(0);
+      expect(results.summary.intelligentAnalysisCount).toBeGreaterThan(0);
       expect(results.summary.filesAnalyzed).toBe(1);
     });
 
@@ -24,9 +24,11 @@ describe('Hooks Integration Tests', () => {
         ignore: [],
       });
 
-      // Clean hooks should have fewer high-severity issues
-      const highSeverityIssues = results.improvedHooksLoops.filter((l) => l.severity === 'high');
-      expect(highSeverityIssues.length).toBeLessThanOrEqual(1);
+      // Clean hooks should have fewer high-severity confirmed loops
+      const confirmedLoops = results.intelligentHooksAnalysis.filter(
+        (l) => l.type === 'confirmed-infinite-loop'
+      );
+      expect(confirmedLoops.length).toBeLessThanOrEqual(1);
     });
 
     it('should handle edge cases without crashing', async () => {
@@ -35,8 +37,8 @@ describe('Hooks Integration Tests', () => {
         ignore: [],
       });
 
-      expect(results).toHaveProperty('improvedHooksLoops');
-      expect(Array.isArray(results.improvedHooksLoops)).toBe(true);
+      expect(results).toHaveProperty('intelligentHooksAnalysis');
+      expect(Array.isArray(results.intelligentHooksAnalysis)).toBe(true);
     });
 
     it('should include hooks loops in total issue count', async () => {
@@ -48,16 +50,14 @@ describe('Hooks Integration Tests', () => {
       const totalExpected =
         results.summary.circularDependencies +
         results.summary.crossFileCycles +
-        results.summary.hooksDependencyLoops +
-        results.summary.simpleHooksLoops +
-        results.summary.improvedHooksLoops;
+        results.summary.intelligentAnalysisCount;
 
       expect(totalExpected).toBeGreaterThan(0);
     });
   });
 
-  describe('Multiple Analyzer Integration', () => {
-    it('should run all analyzers without conflicts', async () => {
+  describe('Intelligent Analyzer Integration', () => {
+    it('should run intelligent analyzer without conflicts', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: '*.tsx',
         ignore: ['clean-*'],
@@ -65,16 +65,12 @@ describe('Hooks Integration Tests', () => {
 
       expect(results).toHaveProperty('circularDependencies');
       expect(results).toHaveProperty('crossFileCycles');
-      expect(results).toHaveProperty('hooksDependencyLoops');
-      expect(results).toHaveProperty('simpleHooksLoops');
-      expect(results).toHaveProperty('improvedHooksLoops');
+      expect(results).toHaveProperty('intelligentHooksAnalysis');
 
       // Verify all result arrays exist and have expected structure
       expect(results.circularDependencies).toBeDefined();
       expect(results.crossFileCycles).toBeDefined();
-      expect(results.hooksDependencyLoops).toBeDefined();
-      expect(results.simpleHooksLoops).toBeDefined();
-      expect(results.improvedHooksLoops).toBeDefined();
+      expect(results.intelligentHooksAnalysis).toBeDefined();
     });
 
     it('should provide comprehensive summary', async () => {
@@ -87,9 +83,7 @@ describe('Hooks Integration Tests', () => {
       expect(results.summary).toHaveProperty('hooksAnalyzed');
       expect(results.summary).toHaveProperty('circularDependencies');
       expect(results.summary).toHaveProperty('crossFileCycles');
-      expect(results.summary).toHaveProperty('hooksDependencyLoops');
-      expect(results.summary).toHaveProperty('simpleHooksLoops');
-      expect(results.summary).toHaveProperty('improvedHooksLoops');
+      expect(results.summary).toHaveProperty('intelligentAnalysisCount');
 
       expect(results.summary.filesAnalyzed).toBeGreaterThan(0);
       expect(results.summary.hooksAnalyzed).toBeGreaterThan(0);
@@ -160,12 +154,13 @@ describe('Hooks Integration Tests', () => {
         ignore: [],
       });
 
-      // Should detect state-setter-dependency patterns
-      const hasStateDependencyPattern = results.improvedHooksLoops.some(
-        (loop) => loop.type === 'state-setter-dependency'
-      );
+      // Should detect confirmed or potential issues
+      const hasIssues =
+        results.intelligentHooksAnalysis.filter(
+          (issue) => issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue'
+        ).length > 0;
 
-      expect(hasStateDependencyPattern).toBe(true);
+      expect(hasIssues).toBe(true);
     });
 
     it('should provide actionable error messages', async () => {
@@ -174,12 +169,49 @@ describe('Hooks Integration Tests', () => {
         ignore: [],
       });
 
-      results.improvedHooksLoops.forEach((loop) => {
-        expect(loop.description).toContain('creating infinite');
-        expect(loop.description.length).toBeGreaterThan(20);
-        expect(loop.file).toContain('.tsx');
-        expect(loop.line).toBeGreaterThan(0);
+      results.intelligentHooksAnalysis.forEach((issue) => {
+        expect(issue.explanation).toBeDefined();
+        expect(issue.explanation.length).toBeGreaterThan(20);
+        expect(issue.file).toContain('.tsx');
+        expect(issue.line).toBeGreaterThan(0);
       });
+    });
+  });
+
+  describe('useRef Mutation Detection', () => {
+    it('should detect ref mutations that store state values with ref dependencies', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'ref-mutation-example.tsx',
+        ignore: [],
+      });
+
+      // Should find at least one ref mutation issue (RLD-600)
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+
+      expect(refMutationIssues.length).toBeGreaterThanOrEqual(1);
+      expect(refMutationIssues[0].type).toBe('potential-issue');
+      expect(refMutationIssues[0].category).toBe('warning');
+      expect(refMutationIssues[0].explanation).toContain('ref');
+    });
+
+    it('should not flag safe ref mutations without ref dependencies', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'ref-mutation-example.tsx',
+        ignore: [],
+      });
+
+      // Safe patterns should not produce RLD-600 for the SafeRefMutation component
+      const allIssues = results.intelligentHooksAnalysis;
+
+      // Should have detected the file
+      expect(results.summary.filesAnalyzed).toBe(1);
+
+      // Verify that the safe patterns don't have multiple RLD-600 issues
+      // (only the problematic one should be flagged)
+      const refMutationIssues = allIssues.filter((issue) => issue.errorCode === 'RLD-600');
+      expect(refMutationIssues.length).toBeLessThanOrEqual(1);
     });
   });
 });
