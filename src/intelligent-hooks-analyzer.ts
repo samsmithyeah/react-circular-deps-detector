@@ -428,11 +428,12 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           const isUnstableSource =
             t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
           if (isUnstableSource) {
+            const varType = t.isArrayExpression(init) ? 'array' : 'function-call';
             for (const el of id.elements) {
               if (t.isIdentifier(el)) {
                 unstableVars.set(el.name, {
                   name: el.name,
-                  type: 'function-call',
+                  type: varType,
                   line,
                   isMemoized: false,
                   isModuleLevel: false,
@@ -460,11 +461,12 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           const isUnstableSource =
             t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
           if (isUnstableSource) {
+            const varType = t.isObjectExpression(init) ? 'object' : 'function-call';
             for (const prop of id.properties) {
               if (t.isObjectProperty(prop) && t.isIdentifier(prop.value)) {
                 unstableVars.set(prop.value.name, {
                   name: prop.value.name,
-                  type: 'function-call',
+                  type: varType,
                   line,
                   isMemoized: false,
                   isModuleLevel: false,
@@ -472,7 +474,7 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
               } else if (t.isRestElement(prop) && t.isIdentifier(prop.argument)) {
                 unstableVars.set(prop.argument.name, {
                   name: prop.argument.name,
-                  type: 'function-call',
+                  type: varType,
                   line,
                   isMemoized: false,
                   isModuleLevel: false,
