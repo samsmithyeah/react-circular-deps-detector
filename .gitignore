@@ -40,3 +40,6 @@ yarn.lock
 pnpm-lock.yaml
 
 repomix-output.xml
+
+# Docs
+docs/
