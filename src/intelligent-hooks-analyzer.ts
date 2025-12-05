@@ -495,7 +495,12 @@ function analyzeHookNode(
           explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`
         });
       } else {
-        // useCallback/useMemo - can't cause loops directly, but may be concerning
+        // useCallback/useMemo - can't cause loops directly
+        // If it uses a functional updater, it's completely safe - don't report
+        if (stateInteractions.functionalUpdates.includes(setter)) {
+          return null; // Functional updater in useCallback/useMemo is safe
+        }
+        // Only warn if it's NOT using functional updater (reads dep value directly)
         return createAnalysis({
           type: 'potential-issue',
           severity: 'low',

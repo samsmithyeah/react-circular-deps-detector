@@ -344,6 +344,37 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       // useCallback cannot cause infinite loops by itself
       expect(infiniteLoops).toHaveLength(0);
     });
+
+    it('should NOT flag useCallback with functional updater at all', () => {
+      // This pattern is completely safe:
+      // 1. useCallback doesn't auto-execute
+      // 2. Functional updater doesn't read the dependency directly
+      const parsed = createTestFile(`
+        import React, { useState, useCallback } from 'react';
+
+        export function Component() {
+          const [cache, setCache] = useState<{ [key: string]: any }>({});
+
+          const updateCache = useCallback(async (key: string, value: any) => {
+            // Functional updater - doesn't read cache directly
+            setCache((prev) => ({
+              ...prev,
+              [key]: value
+            }));
+          }, [cache]); // cache in deps for reference stability
+
+          return <button onClick={() => updateCache('foo', 'bar')}>Update</button>;
+        }
+      `);
+
+      const results = analyzeHooksIntelligently([parsed]);
+
+      // Should not flag anything - functional updater in useCallback is completely safe
+      const issues = results.filter(r =>
+        r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+      expect(issues).toHaveLength(0);
+    });
   });
 });
 

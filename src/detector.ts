@@ -1,6 +1,7 @@
 import { glob } from 'glob';
 import * as path from 'path';
 import * as fs from 'fs';
+import micromatch from 'micromatch';
 import { parseFile, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { HooksDependencyAnalyzer, HooksDependencyLoop } from './hooks-dependency-analyzer';
@@ -149,16 +150,8 @@ async function findFiles(targetPath: string, options: DetectorOptions): Promise<
     ignore: {
       ignored: (p: any) => {
         const fullPath = p.fullpath ? p.fullpath() : p;
-        // Check if path matches any ignore pattern
-        return ignorePatterns.some(pattern => {
-          // Convert glob pattern to regex-like check
-          // Handle common patterns like **/node_modules/**
-          const patternRegex = pattern
-            .replace(/\*\*/g, '.*')
-            .replace(/\*/g, '[^/]*')
-            .replace(/\//g, '\\/');
-          return new RegExp(patternRegex).test(fullPath);
-        });
+        // Use micromatch for robust glob pattern matching
+        return micromatch.isMatch(fullPath, ignorePatterns);
       }
     },
     absolute: true,
