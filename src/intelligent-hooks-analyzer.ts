@@ -359,6 +359,35 @@ function extractStateInfo(ast: t.Node) {
   return stateVariables;
 }
 
+/** Function calls that return stable/primitive values */
+const STABLE_FUNCTION_CALLS = new Set([
+  'require',
+  'String',
+  'Number',
+  'Boolean',
+  'parseInt',
+  'parseFloat',
+]);
+
+/**
+ * Check if a CallExpression is a stable function call (returns primitive or stable value)
+ */
+function isStableFunctionCall(init: t.CallExpression): boolean {
+  const callee = init.callee;
+
+  // React hooks return stable references
+  if (t.isIdentifier(callee) && callee.name.startsWith('use')) {
+    return true;
+  }
+
+  // Known stable function calls
+  if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Extract local variables that are potentially unstable (recreated on each render).
  * This includes object literals, array literals, functions, and function call results
@@ -414,19 +443,17 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
           return;
         }
 
-        // Track array destructuring from other React hooks - stable
-        if (
-          t.isCallExpression(init) &&
-          t.isIdentifier(init.callee) &&
-          init.callee.name.startsWith('use')
-        ) {
-          return; // Hook return values are managed by React
+        // Skip stable function calls (React hooks, parseInt, etc.)
+        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+          return;
         }
 
         // Inside component: destructuring from unstable source
         if (componentDepth > 0 && init) {
           const isUnstableSource =
-            t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
+            (t.isCallExpression(init) && !isStableFunctionCall(init)) ||
+            t.isArrayExpression(init) ||
+            t.isObjectExpression(init);
           if (isUnstableSource) {
             const varType = t.isArrayExpression(init) ? 'array' : 'function-call';
             for (const el of id.elements) {
@@ -447,19 +474,17 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
 
       // Handle object destructuring: const { a, b } = ...
       if (t.isObjectPattern(id)) {
-        // Track object destructuring from React hooks - stable
-        if (
-          t.isCallExpression(init) &&
-          t.isIdentifier(init.callee) &&
-          init.callee.name.startsWith('use')
-        ) {
-          return; // Hook return values are managed by React
+        // Skip stable function calls (React hooks, parseInt, etc.)
+        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+          return;
         }
 
         // Inside component: destructuring from unstable source
         if (componentDepth > 0 && init) {
           const isUnstableSource =
-            t.isCallExpression(init) || t.isArrayExpression(init) || t.isObjectExpression(init);
+            (t.isCallExpression(init) && !isStableFunctionCall(init)) ||
+            t.isArrayExpression(init) ||
+            t.isObjectExpression(init);
           if (isUnstableSource) {
             const varType = t.isObjectExpression(init) ? 'object' : 'function-call';
             for (const prop of id.properties) {
@@ -570,24 +595,9 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         }
         // Function call that likely returns new object/array: const config = createConfig()
         else if (t.isCallExpression(init)) {
-          const callee = init.callee;
-          // Skip React hooks - they return stable references
-          if (t.isIdentifier(callee) && callee.name.startsWith('use')) {
+          // Skip stable function calls (React hooks, parseInt, etc.)
+          if (isStableFunctionCall(init)) {
             return;
-          }
-          // Skip common stable function calls
-          if (t.isIdentifier(callee)) {
-            const stableCallNames = [
-              'require',
-              'String',
-              'Number',
-              'Boolean',
-              'parseInt',
-              'parseFloat',
-            ];
-            if (stableCallNames.includes(callee.name)) {
-              return;
-            }
           }
           // Other function calls may return new objects
           unstableVars.set(varName, {
