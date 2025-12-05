@@ -2,12 +2,11 @@ import { glob, Path } from 'glob';
 import * as path from 'path';
 import * as fs from 'fs';
 import micromatch from 'micromatch';
-import { parseFile, HookInfo, ParsedFile } from './parser';
+import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
-import { HooksDependencyAnalyzer, HooksDependencyLoop } from './hooks-dependency-analyzer';
-import { detectSimpleHooksLoops, SimpleHookLoop } from './simple-hooks-analyzer';
-import { detectImprovedHooksLoops, HooksLoop } from './improved-hooks-analyzer';
 import { analyzeHooksIntelligently, IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
+import { loadConfig, RcdConfig, severityLevel, confidenceLevel, DEFAULT_CONFIG } from './config';
+import { AstCache } from './cache';
 
 export interface CircularDependency {
   file: string;
@@ -19,33 +18,41 @@ export interface CircularDependency {
 export interface DetectionResults {
   circularDependencies: CircularDependency[];
   crossFileCycles: CrossFileCycle[];
-  hooksDependencyLoops: HooksDependencyLoop[];
-  simpleHooksLoops: SimpleHookLoop[];
-  improvedHooksLoops: HooksLoop[];
   intelligentHooksAnalysis: IntelligentHookAnalysis[];
   summary: {
     filesAnalyzed: number;
     hooksAnalyzed: number;
     circularDependencies: number;
     crossFileCycles: number;
-    hooksDependencyLoops: number;
-    simpleHooksLoops: number;
-    improvedHooksLoops: number;
     intelligentAnalysisCount: number;
   };
 }
 
-interface DetectorOptions {
+export interface DetectorOptions {
   pattern: string;
   ignore: string[];
+  /** Optional configuration override (if not provided, will load from config file) */
+  config?: RcdConfig;
+  /** Enable caching for improved performance on repeated runs */
+  cache?: boolean;
 }
 
 export async function detectCircularDependencies(
   targetPath: string,
   options: DetectorOptions
 ): Promise<DetectionResults> {
-  const files = await findFiles(targetPath, options);
+  // Load configuration (from file or options override)
+  const config = options.config ? { ...DEFAULT_CONFIG, ...options.config } : loadConfig(targetPath);
+
+  // Merge config ignore patterns with CLI ignore patterns
+  const mergedIgnore = [...options.ignore, ...(config.ignore || [])];
+  const mergedOptions = { ...options, ignore: mergedIgnore };
+
+  const files = await findFiles(targetPath, mergedOptions);
   const parsedFiles: ParsedFile[] = [];
+
+  // Initialize cache if enabled
+  const astCache = options.cache ? new AstCache(targetPath) : undefined;
 
   for (const file of files) {
     // Skip files that are definitely not React components
@@ -54,7 +61,7 @@ export async function detectCircularDependencies(
     }
 
     try {
-      const parsed = parseFile(file);
+      const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
       parsedFiles.push(parsed);
     } catch (error) {
       // Only show warnings if not in quiet mode (we'll add a flag for this later)
@@ -62,6 +69,11 @@ export async function detectCircularDependencies(
         console.warn(`Warning: Could not parse ${file}:`, error);
       }
     }
+  }
+
+  // Save cache at the end if caching is enabled
+  if (astCache) {
+    astCache.save();
   }
 
   const circularDeps = findCircularDependencies(parsedFiles);
@@ -73,36 +85,44 @@ export async function detectCircularDependencies(
     ...detectAdvancedCrossFileCycles(parsedFiles),
   ];
 
-  // Analyze React hooks dependency loops
-  const hooksAnalyzer = new HooksDependencyAnalyzer();
-  const hooksAnalysis = hooksAnalyzer.analyzeFiles(parsedFiles);
+  // Run intelligent hooks analysis (consolidated single analyzer)
+  const rawAnalysis = analyzeHooksIntelligently(parsedFiles, {
+    stableHooks: config.stableHooks,
+    unstableHooks: config.unstableHooks,
+    customFunctions: config.customFunctions,
+  });
 
-  // Run simple hooks loop detection
-  const simpleHooksLoops = detectSimpleHooksLoops(parsedFiles);
+  // Filter results based on config
+  const intelligentHooksAnalysis = rawAnalysis.filter((issue) => {
+    // Filter by type
+    if (!config.includePotentialIssues && issue.type === 'potential-issue') {
+      return false;
+    }
 
-  // Run improved hooks loop detection
-  const improvedHooksLoops = detectImprovedHooksLoops(parsedFiles);
+    // Filter by severity
+    if (severityLevel(issue.severity) < severityLevel(config.minSeverity)) {
+      return false;
+    }
 
-  // Run intelligent hooks analysis
-  const intelligentHooksAnalysis = analyzeHooksIntelligently(parsedFiles);
+    // Filter by confidence
+    if (confidenceLevel(issue.confidence) < confidenceLevel(config.minConfidence)) {
+      return false;
+    }
+
+    return true;
+  });
 
   const totalHooks = parsedFiles.reduce((sum, file) => sum + file.hooks.length, 0);
 
   return {
     circularDependencies: circularDeps,
     crossFileCycles: allCrossFileCycles,
-    hooksDependencyLoops: hooksAnalysis.dependencyLoops,
-    simpleHooksLoops: simpleHooksLoops,
-    improvedHooksLoops: improvedHooksLoops,
     intelligentHooksAnalysis: intelligentHooksAnalysis,
     summary: {
       filesAnalyzed: parsedFiles.length,
       hooksAnalyzed: totalHooks,
       circularDependencies: circularDeps.length,
       crossFileCycles: allCrossFileCycles.length,
-      hooksDependencyLoops: hooksAnalysis.dependencyLoops.length,
-      simpleHooksLoops: simpleHooksLoops.length,
-      improvedHooksLoops: improvedHooksLoops.length,
       intelligentAnalysisCount: intelligentHooksAnalysis.length,
     },
   };

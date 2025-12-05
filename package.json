@@ -1,11 +1,20 @@
 {
-  "name": "react-circular-deps-detector",
+  "name": "react-loop-detector",
   "version": "1.0.0",
-  "description": "CLI tool to detect circular dependencies in React hooks dependency arrays",
-  "main": "dist/cli.js",
+  "description": "Detect circular dependencies and infinite re-render risks in React hooks",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
-    "react-circular-deps": "./dist/cli.js",
-    "rcd": "./dist/cli.js"
+    "react-loop-detector": "./dist/cli.js",
+    "rld": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    },
+    "./cli": "./dist/cli.js"
   },
   "preferGlobal": true,
   "scripts": {
@@ -31,8 +40,12 @@
     "useEffect",
     "useCallback",
     "useMemo",
+    "infinite-loop",
+    "re-render",
+    "static-analysis",
     "linter",
-    "cli"
+    "cli",
+    "ast"
   ],
   "author": "",
   "license": "MIT",

@@ -574,8 +574,33 @@ function detectUseEffectWithoutDeps(
   return results;
 }
 
-export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): IntelligentHookAnalysis[] {
+/** Options for intelligent hooks analysis */
+export interface AnalyzerOptions {
+  /** Hooks known to return stable references */
+  stableHooks?: string[];
+  /** Hooks known to return unstable references */
+  unstableHooks?: string[];
+  /** Custom function stability settings */
+  customFunctions?: Record<
+    string,
+    {
+      stable?: boolean;
+      deferred?: boolean;
+    }
+  >;
+}
+
+// Store options at module level so helper functions can access them
+let currentOptions: AnalyzerOptions = {};
+
+export function analyzeHooksIntelligently(
+  parsedFiles: ParsedFile[],
+  options: AnalyzerOptions = {}
+): IntelligentHookAnalysis[] {
   const results: IntelligentHookAnalysis[] = [];
+
+  // Store options for helper functions
+  currentOptions = options;
 
   // First, build cross-file analysis including imported utilities
   // Only show progress if not in test mode and not generating JSON output
@@ -595,6 +620,36 @@ export function analyzeHooksIntelligently(parsedFiles: ParsedFile[]): Intelligen
   }
 
   return results;
+}
+
+/**
+ * Check if a hook is configured as stable via options
+ */
+export function isConfiguredStableHook(hookName: string): boolean {
+  return currentOptions.stableHooks?.includes(hookName) ?? false;
+}
+
+/**
+ * Check if a hook is configured as unstable via options
+ */
+export function isConfiguredUnstableHook(hookName: string): boolean {
+  return currentOptions.unstableHooks?.includes(hookName) ?? false;
+}
+
+/**
+ * Check if a function is configured as stable via options
+ * Reserved for future use when customFunctions config is fully integrated
+ */
+export function isConfiguredStableFunction(functionName: string): boolean {
+  return currentOptions.customFunctions?.[functionName]?.stable ?? false;
+}
+
+/**
+ * Check if a function is configured as deferred (async) via options
+ * Reserved for future use when customFunctions config is fully integrated
+ */
+export function isConfiguredDeferredFunction(functionName: string): boolean {
+  return currentOptions.customFunctions?.[functionName]?.deferred ?? false;
 }
 
 function analyzeFileIntelligently(
@@ -872,6 +927,18 @@ function isStableFunctionCall(init: t.CallExpression): boolean {
   // Known stable function calls
   if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
     return true;
+  }
+
+  // Check for user-configured stable/unstable hooks first
+  if (t.isIdentifier(callee)) {
+    // If explicitly marked as unstable in config, return false
+    if (isConfiguredUnstableHook(callee.name)) {
+      return false;
+    }
+    // If explicitly marked as stable in config, return true
+    if (isConfiguredStableHook(callee.name)) {
+      return true;
+    }
   }
 
   // Custom hooks (use* prefix) are treated as stable by default

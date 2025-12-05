@@ -13,12 +13,16 @@ interface CliOptions {
   ignore: string[];
   json?: boolean;
   color?: boolean;
+  minSeverity?: 'high' | 'medium' | 'low';
+  minConfidence?: 'high' | 'medium' | 'low';
+  confirmedOnly?: boolean;
+  cache?: boolean;
 }
 
 const program = new Command();
 
 program
-  .name('react-circular-deps')
+  .name('react-loop-detector')
   .description('Detect circular import dependencies and React hooks infinite re-render risks')
   .version('1.0.0')
   .argument('<path>', 'Path to React project or file to analyze')
@@ -35,6 +39,10 @@ program
   ])
   .option('--json', 'Output results as JSON')
   .option('--no-color', 'Disable colored output')
+  .option('--min-severity <level>', 'Minimum severity to report (high, medium, low)', 'low')
+  .option('--min-confidence <level>', 'Minimum confidence to report (high, medium, low)', 'low')
+  .option('--confirmed-only', 'Only report confirmed infinite loops (not potential issues)')
+  .option('--cache', 'Enable caching for faster repeated runs')
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -59,6 +67,12 @@ program
       const results = await detectCircularDependencies(absolutePath, {
         pattern: options.pattern,
         ignore: options.ignore,
+        cache: options.cache,
+        config: {
+          minSeverity: options.minSeverity,
+          minConfidence: options.minConfidence,
+          includePotentialIssues: !options.confirmedOnly,
+        },
       });
 
       if (options.json) {
@@ -69,13 +83,9 @@ program
 
       // Only exit with error for critical issues
       const criticalIssues = results.circularDependencies.length + results.crossFileCycles.length;
-      const confirmedLoops = results.intelligentHooksAnalysis
-        ? results.intelligentHooksAnalysis.filter(
-            (issue) => issue.type === 'confirmed-infinite-loop'
-          ).length
-        : results.hooksDependencyLoops.length +
-          results.simpleHooksLoops.length +
-          results.improvedHooksLoops.length;
+      const confirmedLoops = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.type === 'confirmed-infinite-loop'
+      ).length;
 
       if (criticalIssues > 0 || confirmedLoops > 0) {
         process.exit(1);
@@ -152,35 +162,19 @@ function displayIntelligentIssue(issue: IntelligentHookAnalysis) {
 }
 
 function formatResults(results: DetectionResults) {
-  const {
-    circularDependencies,
-    crossFileCycles,
-    hooksDependencyLoops,
-    simpleHooksLoops,
-    improvedHooksLoops,
-    intelligentHooksAnalysis,
-    summary,
-  } = results;
+  const { circularDependencies, crossFileCycles, intelligentHooksAnalysis, summary } = results;
 
   let hasIssues = false;
 
-  // Use intelligent analysis if available, otherwise fall back to basic analyzers
-  const useIntelligentAnalysis = intelligentHooksAnalysis && intelligentHooksAnalysis.length > 0;
+  // Separate by severity type
+  const confirmedIssues = intelligentHooksAnalysis.filter(
+    (issue) => issue.type === 'confirmed-infinite-loop'
+  );
+  const potentialIssues = intelligentHooksAnalysis.filter(
+    (issue) => issue.type === 'potential-issue'
+  );
 
-  // For intelligent analysis, separate by severity type
-  const confirmedIssues = useIntelligentAnalysis
-    ? intelligentHooksAnalysis.filter((issue) => issue.type === 'confirmed-infinite-loop')
-    : [];
-  const potentialIssues = useIntelligentAnalysis
-    ? intelligentHooksAnalysis.filter((issue) => issue.type === 'potential-issue')
-    : [];
-
-  // Fallback issues from basic analyzers (treated as confirmed when intelligent analysis unavailable)
-  const fallbackIssues = useIntelligentAnalysis
-    ? []
-    : [...hooksDependencyLoops, ...simpleHooksLoops, ...improvedHooksLoops];
-
-  const totalHooksIssues = confirmedIssues.length + potentialIssues.length + fallbackIssues.length;
+  const totalHooksIssues = confirmedIssues.length + potentialIssues.length;
 
   // Show import/file-level circular dependencies
   if (circularDependencies.length === 0) {
@@ -264,29 +258,6 @@ function formatResults(results: DetectionResults) {
         displayIntelligentIssue(issue);
       });
     }
-
-    // Show fallback analyzer issues (when intelligent analysis is not available)
-    if (fallbackIssues.length > 0) {
-      console.log(chalk.red(`\n🚨 Found ${fallbackIssues.length} hooks dependency issue(s):\n`));
-
-      fallbackIssues.forEach((issue, index: number) => {
-        console.log(chalk.redBright(`${index + 1}. ${issue.description}`));
-        console.log(chalk.gray(`   Severity: ${issue.severity}`));
-        if ('file' in issue && 'line' in issue) {
-          console.log(
-            chalk.gray(`   Location: ${path.relative(process.cwd(), issue.file)}:${issue.line}`)
-          );
-        }
-        if ('files' in issue && issue.files.length > 0) {
-          console.log(
-            chalk.gray(
-              `   Files: ${issue.files.map((f: string) => path.relative(process.cwd(), f)).join(', ')}`
-            )
-          );
-        }
-        console.log();
-      });
-    }
   }
 
   if (!hasIssues) {
@@ -301,32 +272,19 @@ function formatResults(results: DetectionResults) {
   console.log(chalk.gray(`Files analyzed: ${summary.filesAnalyzed}`));
   console.log(chalk.gray(`Hooks analyzed: ${summary.hooksAnalyzed}`));
 
-  if (useIntelligentAnalysis) {
-    // Show intelligent analysis summary
-    const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
-    if (totalCriticalIssues > 0) {
-      console.log(chalk.red(`Critical issues: ${totalCriticalIssues}`));
-      console.log(chalk.gray(`  Import cycles: ${importCyclesCount}`));
-      console.log(chalk.gray(`  Confirmed infinite loops: ${confirmedIssues.length}`));
-    }
+  const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
+  if (totalCriticalIssues > 0) {
+    console.log(chalk.red(`Critical issues: ${totalCriticalIssues}`));
+    console.log(chalk.gray(`  Import cycles: ${importCyclesCount}`));
+    console.log(chalk.gray(`  Confirmed infinite loops: ${confirmedIssues.length}`));
+  }
 
-    if (potentialIssues.length > 0) {
-      console.log(chalk.yellow(`Potential issues to review: ${potentialIssues.length}`));
-    }
+  if (potentialIssues.length > 0) {
+    console.log(chalk.yellow(`Potential issues to review: ${potentialIssues.length}`));
+  }
 
-    if (totalCriticalIssues === 0 && potentialIssues.length === 0) {
-      console.log(chalk.green(`No issues found`));
-    }
-  } else {
-    // Fallback to basic summary
-    const totalFallbackIssues = importCyclesCount + fallbackIssues.length;
-    if (totalFallbackIssues > 0) {
-      console.log(chalk.red(`Issues found: ${totalFallbackIssues}`));
-      console.log(chalk.gray(`  Import cycles: ${importCyclesCount}`));
-      console.log(chalk.gray(`  Hooks issues: ${fallbackIssues.length}`));
-    } else {
-      console.log(chalk.green(`No issues found`));
-    }
+  if (totalCriticalIssues === 0 && potentialIssues.length === 0) {
+    console.log(chalk.green(`No issues found`));
   }
 }
 
