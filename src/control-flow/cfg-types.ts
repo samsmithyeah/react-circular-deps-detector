@@ -200,23 +200,6 @@ export interface GuardAnalysis {
 }
 
 /**
- * Types of edges in the CFG.
- */
-type CFGEdgeType =
-  | 'sequential' // Normal sequential flow
-  | 'conditional-true' // True branch of conditional
-  | 'conditional-false' // False branch of conditional
-  | 'loop-back' // Back edge in a loop
-  | 'loop-exit' // Exit edge from a loop
-  | 'break' // Break statement edge
-  | 'continue' // Continue statement edge
-  | 'return' // Return statement edge
-  | 'throw' // Throw statement edge
-  | 'exception' // Implicit exception edge (any statement can throw)
-  | 'finally-normal' // Normal entry to finally block
-  | 'finally-exception'; // Exception entry to finally block
-
-/**
  * Options for building a CFG.
  */
 export interface CFGBuilderOptions {
@@ -328,27 +311,4 @@ export interface BreakableContext {
 
   /** Type of breakable construct */
   type: 'loop' | 'switch';
-}
-
-/**
- * Result of checking if a setState call causes an infinite loop.
- */
-interface SetStateAnalysisResult {
-  /** Whether this setState definitely causes an infinite loop */
-  causesInfiniteLoop: boolean;
-
-  /** Whether this setState might cause an infinite loop under some conditions */
-  mightCauseInfiniteLoop: boolean;
-
-  /** Confidence level of the analysis */
-  confidence: 'high' | 'medium' | 'low';
-
-  /** Reachability analysis for the setState call */
-  reachability: ReachabilityResult;
-
-  /** Explanation of the analysis */
-  explanation: string;
-
-  /** Suggested fix if there's an issue */
-  suggestedFix?: string;
 }

@@ -66,7 +66,8 @@ export function analyzeReachability(cfg: CFG, targetNode: CFGNode): Reachability
 export function findAllPaths(source: CFGNode, target: CFGNode): CFGNode[][] {
   const paths: CFGNode[][] = [];
   const currentPath: CFGNode[] = [];
-  const visited = new Set<string>();
+  // Track nodes in the current path to detect cycles (not all visited nodes)
+  const currentPathSet = new Set<string>();
 
   function dfs(node: CFGNode): void {
     // Prevent infinite loops and excessive paths
@@ -74,10 +75,10 @@ export function findAllPaths(source: CFGNode, target: CFGNode): CFGNode[][] {
     if (currentPath.length >= MAX_PATH_LENGTH) return;
 
     // Cycle detection - don't revisit nodes in current path
-    if (visited.has(node.id)) return;
+    if (currentPathSet.has(node.id)) return;
 
     currentPath.push(node);
-    visited.add(node.id);
+    currentPathSet.add(node.id);
 
     if (node === target) {
       paths.push([...currentPath]);
@@ -88,7 +89,7 @@ export function findAllPaths(source: CFGNode, target: CFGNode): CFGNode[][] {
     }
 
     currentPath.pop();
-    visited.delete(node.id);
+    currentPathSet.delete(node.id);
   }
 
   dfs(source);
@@ -239,7 +240,7 @@ function analyzeEqualityGuard(
   node: t.BinaryExpression,
   branchTaken: 'true' | 'false'
 ): GuardAnalysis | null {
-  const { operator, left, right } = node;
+  const { operator } = node;
 
   // Pattern: x !== y (or x != y)
   if (operator === '!==' || operator === '!=') {
@@ -267,20 +268,6 @@ function analyzeEqualityGuard(
         riskLevel: 'safe',
       };
     }
-  }
-
-  // Check for object property comparison (risky with spreads)
-  if (t.isMemberExpression(left) || t.isMemberExpression(right)) {
-    // This might be comparing a property like user.id !== 5
-    // But if setState does { ...user, id: 5 }, it creates a new object
-    return {
-      guardType: 'equality-guard',
-      isEffective: false,
-      guardCondition: node,
-      explanation:
-        'Property comparison guard may not prevent loops if object spread creates new reference',
-      riskLevel: 'risky',
-    };
   }
 
   return null;

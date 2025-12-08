@@ -15,7 +15,6 @@ export type {
   CFG,
   CFGNode,
   CFGNodeType,
-  CFGEdgeType,
   CFGBuilderOptions,
   CFGBuilderContext,
   LoopContext,
@@ -25,7 +24,6 @@ export type {
   ReachabilityResult,
   PathCondition,
   GuardAnalysis,
-  SetStateAnalysisResult,
 } from './cfg-types';
 
 // Builder

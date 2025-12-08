@@ -1815,8 +1815,11 @@ function analyzeHookNode(
   if (hookBody) {
     try {
       cfgAnalysis = analyzeSetStateCalls(hookBody, stateInfo, dependencies);
-    } catch {
+    } catch (error) {
       // CFG building can fail on very unusual code patterns
+      if (process.env.DEBUG) {
+        console.warn(`[CFG] Failed to analyze setState calls in ${filePath}:`, error);
+      }
       cfgAnalysis = null;
     }
   }
