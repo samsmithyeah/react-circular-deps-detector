@@ -13,13 +13,11 @@
  * - unstable-refs-detector.ts: Unstable reference detection in dependency arrays
  */
 
-import * as t from '@babel/types';
-import traverse, { NodePath } from '@babel/traverse';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ParsedFile, parseFile } from './parser';
 import { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analyzer';
-import { createPathResolver, PathResolver } from './path-resolver';
+import { createPathResolver } from './path-resolver';
 import { TypeChecker, createTypeChecker } from './type-checker';
 
 // Import types
@@ -235,25 +233,28 @@ function analyzeFileIntelligently(
 
 /**
  * Expand the list of files to include imported utilities.
+ * Uses a queue-based traversal to recursively include all transitive imports.
  */
 function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
-  const allFiles = [...parsedFiles];
-  const processedPaths = new Set(parsedFiles.map((f) => f.file));
+  const allFilesMap = new Map<string, ParsedFile>(parsedFiles.map((f) => [f.file, f]));
+  const queue = [...parsedFiles];
 
   // Find project root for path resolution
   const projectRoot = findProjectRoot(parsedFiles);
   const pathResolver = projectRoot ? createPathResolver({ projectRoot }) : null;
 
-  // Extract imports from React files and try to include utility files
-  for (const file of parsedFiles) {
-    const imports = extractImportPaths(file.file, pathResolver);
+  let fileToProcess: ParsedFile | undefined;
+  while ((fileToProcess = queue.shift())) {
+    // Use the already-parsed imports from ParsedFile
+    for (const importInfo of fileToProcess.imports) {
+      // Try to resolve the import path
+      const resolvedPath = pathResolver?.resolve(fileToProcess.file, importInfo.source);
 
-    for (const importPath of imports) {
-      if (!processedPaths.has(importPath)) {
+      if (resolvedPath && !allFilesMap.has(resolvedPath)) {
         try {
-          const parsed = parseFile(importPath);
-          allFiles.push(parsed);
-          processedPaths.add(importPath);
+          const newParsedFile = parseFile(resolvedPath);
+          allFilesMap.set(resolvedPath, newParsedFile);
+          queue.push(newParsedFile); // Process imports of the new file
         } catch {
           // Silently skip files that can't be parsed
         }
@@ -261,7 +262,7 @@ function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
     }
   }
 
-  return allFiles;
+  return Array.from(allFilesMap.values());
 }
 
 /**
@@ -284,84 +285,6 @@ function findProjectRoot(parsedFiles: ParsedFile[]): string | null {
     }
 
     dir = path.dirname(dir);
-  }
-
-  return null;
-}
-
-/**
- * Extract import paths from a file.
- */
-function extractImportPaths(filePath: string, pathResolver: PathResolver | null): string[] {
-  const imports: string[] = [];
-
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const babel = require('@babel/parser');
-
-    const ast = babel.parse(content, {
-      sourceType: 'module',
-      plugins: ['typescript', 'jsx'],
-    });
-
-    traverse(ast, {
-      ImportDeclaration(nodePath: NodePath<t.ImportDeclaration>) {
-        const importPath = nodePath.node.source.value;
-
-        // Skip node_modules imports. Prioritize path aliases and relative/absolute paths.
-        if (
-          !importPath.startsWith('.') &&
-          !importPath.startsWith('/') &&
-          !pathResolver?.canResolve(importPath)
-        ) {
-          return; // Likely a node module, skip.
-        }
-
-        // Try to resolve the import
-        let resolvedPath: string | null = null;
-
-        // First try the path resolver (handles aliases)
-        if (pathResolver && pathResolver.canResolve(importPath)) {
-          resolvedPath = pathResolver.resolve(filePath, importPath);
-        }
-
-        // Fallback to relative import resolution
-        if (!resolvedPath && (importPath.startsWith('./') || importPath.startsWith('../'))) {
-          resolvedPath = resolveImportPath(filePath, importPath);
-        }
-
-        if (resolvedPath) {
-          imports.push(resolvedPath);
-        }
-      },
-    });
-  } catch {
-    // Ignore parsing errors
-  }
-
-  return imports;
-}
-
-/**
- * Resolve a relative import path to an absolute file path.
- */
-function resolveImportPath(fromFile: string, importPath: string): string | null {
-  const basePath = path.dirname(fromFile);
-  const extensions = ['.ts', '.tsx', '.js', '.jsx'];
-
-  for (const ext of extensions) {
-    const fullPath = path.resolve(basePath, importPath + ext);
-    if (fs.existsSync(fullPath)) {
-      return fullPath;
-    }
-  }
-
-  // Try with index files
-  for (const ext of extensions) {
-    const indexPath = path.resolve(basePath, importPath, 'index' + ext);
-    if (fs.existsSync(indexPath)) {
-      return indexPath;
-    }
   }
 
   return null;
