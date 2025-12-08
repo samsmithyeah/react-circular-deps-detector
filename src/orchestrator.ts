@@ -308,22 +308,13 @@ function extractImportPaths(filePath: string, pathResolver: PathResolver | null)
       ImportDeclaration(nodePath: NodePath<t.ImportDeclaration>) {
         const importPath = nodePath.node.source.value;
 
-        // Skip node_modules imports (but not path aliases)
+        // Skip node_modules imports. Prioritize path aliases and relative/absolute paths.
         if (
           !importPath.startsWith('.') &&
-          !importPath.startsWith('@/') &&
-          !importPath.startsWith('~/')
+          !importPath.startsWith('/') &&
+          !pathResolver?.canResolve(importPath)
         ) {
-          // Check if it's a scoped package like @types/react
-          if (importPath.startsWith('@') && importPath.includes('/')) {
-            const parts = importPath.split('/');
-            // Scoped packages have format @org/pkg
-            if (!parts[0].endsWith('/')) {
-              return; // Skip node module
-            }
-          } else if (!pathResolver?.canResolve(importPath)) {
-            return; // Skip - likely a node module
-          }
+          return; // Likely a node module, skip.
         }
 
         // Try to resolve the import
