@@ -68,3 +68,10 @@ export {
   TypeInfo,
   TypeCheckerOptions,
 } from './type-checker';
+
+// Path resolver
+export {
+  createPathResolver,
+  PathResolver,
+  PathResolverOptions,
+} from './path-resolver';

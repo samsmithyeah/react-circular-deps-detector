@@ -18,9 +18,11 @@ import {
   loadConfig,
   parseFile,
   analyzeHooksIntelligently,
+  createPathResolver,
   type DetectionResults,
   type RcdConfig,
   type ParsedFile,
+  type PathResolver,
 } from 'react-loop-detector';
 import {
   mapAnalysisToDiagnostics,
@@ -66,6 +68,9 @@ let pendingAnalysis = false;
 // Incremental cache for fast updates
 const incrementalCache = new IncrementalCache();
 
+// Path resolver for resolving import paths
+let pathResolver: PathResolver | null = null;
+
 // Initialize
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   const capabilities = params.capabilities;
@@ -99,6 +104,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 connection.onInitialized(async () => {
   if (hasConfigurationCapability) {
     connection.client.register(DidChangeConfigurationNotification.type, undefined);
+  }
+
+  // Initialize path resolver for the workspace
+  if (workspaceRoot) {
+    pathResolver = createPathResolver({ projectRoot: workspaceRoot });
+    incrementalCache.setPathResolver(pathResolver);
+    connection.console.log('Path resolver initialized for workspace');
   }
 
   // Load rld config file
@@ -135,6 +147,9 @@ connection.onDidChangeConfiguration(async (change) => {
   }
 });
 
+// Track files that have changed and need re-analysis
+const pendingChangedFiles = new Set<string>();
+
 // Document change handlers - Two-tier analysis strategy
 documents.onDidChangeContent((change) => {
   if (!globalSettings.enable) return;
@@ -146,6 +161,15 @@ documents.onDidChangeContent((change) => {
   // Check if content actually changed
   if (!incrementalCache.hasFileChanged(filePath, content)) {
     return;
+  }
+
+  // Track this file as changed for incremental analysis
+  pendingChangedFiles.add(filePath);
+
+  // Also track affected files (files that import the changed file)
+  const affectedFiles = incrementalCache.getFilesToReanalyze(filePath);
+  for (const affected of affectedFiles) {
+    pendingChangedFiles.add(affected);
   }
 
   // Tier 1: Fast single-file analysis (immediate feedback, ~50ms)
@@ -384,10 +408,20 @@ async function runFullAnalysis(): Promise<void> {
   }
 
   isAnalyzing = true;
-  connection.console.log('Starting full cross-file analysis...');
+
+  // Log incremental analysis info (future optimization: use this for true incremental analysis)
+  if (pendingChangedFiles.size > 0) {
+    connection.console.log(
+      `Starting cross-file analysis (${pendingChangedFiles.size} files changed/affected)...`
+    );
+  } else {
+    connection.console.log('Starting full cross-file analysis...');
+  }
   notifyAnalysisStarted('full');
 
   try {
+    // Note: Currently runs full analysis. Future optimization could use pendingChangedFiles
+    // to only re-analyze affected files and merge with cached results.
     const results = await detectCircularDependencies(workspaceRoot, {
       pattern: '**/*.{ts,tsx,js,jsx}',
       ignore: [
@@ -408,6 +442,9 @@ async function runFullAnalysis(): Promise<void> {
     });
 
     cachedResults = results;
+
+    // Clear pending changed files after successful analysis
+    pendingChangedFiles.clear();
 
     connection.console.log(
       `Full analysis complete. Found ${results.intelligentHooksAnalysis.length} issues, ${results.crossFileCycles.length} cross-file cycles in ${results.summary.filesAnalyzed} files`

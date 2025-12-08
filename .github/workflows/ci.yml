@@ -87,3 +87,7 @@ jobs:
       - name: Build vscode-extension
         run: npm run build
         working-directory: vscode-extension
+
+      - name: Run vscode-extension unit tests
+        run: npm run test:unit
+        working-directory: vscode-extension

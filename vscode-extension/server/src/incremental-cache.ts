@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { ParsedFile, IntelligentHookAnalysis } from 'react-loop-detector';
+import type { ParsedFile, IntelligentHookAnalysis, PathResolver } from 'react-loop-detector';
 
 /**
  * Incremental caching layer for the LSP server.
@@ -8,6 +8,9 @@ import type { ParsedFile, IntelligentHookAnalysis } from 'react-loop-detector';
  * This enables fast re-analysis by only re-processing changed files and their dependents.
  */
 export class IncrementalCache {
+  // Path resolver for resolving import paths to absolute file paths
+  private pathResolver: PathResolver | null = null;
+
   // File hash cache for change detection
   private fileHashes: Map<string, string> = new Map();
 
@@ -22,6 +25,13 @@ export class IncrementalCache {
 
   // Reverse dependency graph: file -> files that import it
   private dependents: Map<string, Set<string>> = new Map();
+
+  /**
+   * Set the path resolver for resolving import paths
+   */
+  setPathResolver(resolver: PathResolver): void {
+    this.pathResolver = resolver;
+  }
 
   /**
    * Check if a file has changed since last analysis
@@ -125,7 +135,8 @@ export class IncrementalCache {
   }
 
   /**
-   * Update the dependency graph based on parsed file imports
+   * Update the dependency graph based on parsed file imports.
+   * Uses the path resolver to convert import strings to absolute file paths.
    */
   private updateDependencies(filePath: string, parsed: ParsedFile): void {
     // Clear old dependencies for this file
@@ -139,25 +150,25 @@ export class IncrementalCache {
       }
     }
 
-    // Build new dependency set
-    // Note: ImportInfo has 'source' (the import path string), not 'resolvedPath'
-    // For now, we use the source as-is. Full resolution would require the path resolver.
     const newDeps = new Set<string>();
 
     for (const imp of parsed.imports) {
-      // Skip node_modules imports
-      if (imp.source.startsWith('.') || imp.source.startsWith('/') || imp.source.startsWith('@/')) {
-        // Use source as a dependency key (not fully resolved, but works for change tracking)
-        const normalizedImport = this.normalizePath(imp.source);
-        newDeps.add(normalizedImport);
+      // Use the path resolver to get absolute paths for accurate dependency tracking
+      if (this.pathResolver && this.pathResolver.canResolve(imp.source)) {
+        const resolvedPath = this.pathResolver.resolve(filePath, imp.source);
 
-        // Update reverse dependency
-        let dependents = this.dependents.get(normalizedImport);
-        if (!dependents) {
-          dependents = new Set();
-          this.dependents.set(normalizedImport, dependents);
+        if (resolvedPath && !resolvedPath.includes('node_modules')) {
+          const normalizedResolvedPath = this.normalizePath(resolvedPath);
+          newDeps.add(normalizedResolvedPath);
+
+          // Update reverse dependency using the resolved path
+          let dependents = this.dependents.get(normalizedResolvedPath);
+          if (!dependents) {
+            dependents = new Set();
+            this.dependents.set(normalizedResolvedPath, dependents);
+          }
+          dependents.add(filePath);
         }
-        dependents.add(filePath);
       }
     }
 

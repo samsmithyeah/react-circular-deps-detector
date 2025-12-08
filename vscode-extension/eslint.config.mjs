@@ -16,7 +16,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: ['dist/', 'node_modules/', 'test-fixtures/'],
+    ignores: ['dist/', 'node_modules/', 'test-fixtures/', '.vscode-test/'],
   },
   {
     files: ['*.js', '*.mjs'],
@@ -27,7 +27,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['client/src/**/*.ts', 'server/src/**/*.ts'],
+    files: ['client/src/**/*.ts', 'server/src/**/*.ts', 'src/test/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
