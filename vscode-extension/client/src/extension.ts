@@ -176,41 +176,49 @@ export function activate(context: ExtensionContext): void {
   );
 
   // Start the client and set up notification handlers
-  client.start().then(() => {
-    statusBarItem.show();
+  client
+    .start()
+    .then(() => {
+      statusBarItem.show();
 
-    // Check if extension is enabled
-    const config = workspace.getConfiguration('reactLoopDetector');
-    if (!config.get('enable', true)) {
-      updateStatusBar('disabled');
-    }
-
-    // Handle analysis started notification
-    client.onNotification(
-      'reactLoopDetector/analysisStarted',
-      (params: { type: 'single' | 'full' }) => {
-        if (params.type === 'full') {
-          updateStatusBar('analyzingFull');
-        } else {
-          updateStatusBar('analyzing');
-        }
+      // Check if extension is enabled
+      const config = workspace.getConfiguration('reactLoopDetector');
+      if (!config.get('enable', true)) {
+        updateStatusBar('disabled');
       }
-    );
 
-    // Handle analysis complete notification
-    client.onNotification(
-      'reactLoopDetector/analysisComplete',
-      (params: { type: 'single' | 'full'; issueCount: number; filesAnalyzed: number }) => {
-        lastIssueCount = params.issueCount;
-
-        if (params.issueCount > 0) {
-          updateStatusBar('readyWithIssues', params.issueCount);
-        } else {
-          updateStatusBar('ready');
+      // Handle analysis started notification
+      client.onNotification(
+        'reactLoopDetector/analysisStarted',
+        (params: { type: 'single' | 'full' }) => {
+          if (params.type === 'full') {
+            updateStatusBar('analyzingFull');
+          } else {
+            updateStatusBar('analyzing');
+          }
         }
-      }
-    );
-  });
+      );
+
+      // Handle analysis complete notification
+      client.onNotification(
+        'reactLoopDetector/analysisComplete',
+        (params: { type: 'single' | 'full'; issueCount: number; filesAnalyzed: number }) => {
+          lastIssueCount = params.issueCount;
+
+          if (params.issueCount > 0) {
+            updateStatusBar('readyWithIssues', params.issueCount);
+          } else {
+            updateStatusBar('ready');
+          }
+        }
+      );
+    })
+    .catch((error) => {
+      updateStatusBar('error');
+      window.showErrorMessage(
+        `React Loop Detector: Failed to start - ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
 
   // Listen for configuration changes
   context.subscriptions.push(
