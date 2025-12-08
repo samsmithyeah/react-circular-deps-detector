@@ -144,7 +144,12 @@ function formatMessage(issue: IntelligentHookAnalysis): string {
 
 function fileUriToPath(uri: string): string {
   if (uri.startsWith('file://')) {
-    return decodeURIComponent(uri.slice(7));
+    // Handle Windows paths (file:///C:/...)
+    let path = decodeURIComponent(uri.slice(7));
+    if (path.match(/^\/[A-Za-z]:/)) {
+      path = path.slice(1);
+    }
+    return path;
   }
   return uri;
 }

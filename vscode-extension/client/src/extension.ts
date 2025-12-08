@@ -44,22 +44,21 @@ const STATUS = {
   },
 };
 
-function updateStatusBar(
-  state: keyof typeof STATUS | 'readyWithIssues',
-  issueCount?: number
-): void {
-  if (state === 'readyWithIssues' && issueCount !== undefined) {
-    const status = STATUS.readyWithIssues(issueCount);
+function updateStatusBar(state: keyof typeof STATUS, issueCount?: number): void {
+  let status: { text: string; tooltip: string } | undefined;
+
+  if (state === 'readyWithIssues') {
+    if (issueCount !== undefined) {
+      status = STATUS.readyWithIssues(issueCount);
+    }
+  } else {
+    status = STATUS[state];
+  }
+
+  if (status) {
     statusBarItem.text = status.text;
     statusBarItem.tooltip = status.tooltip;
     statusBarItem.backgroundColor = undefined;
-  } else if (state in STATUS && state !== 'readyWithIssues') {
-    const status = STATUS[state as keyof typeof STATUS];
-    if (typeof status === 'object' && 'text' in status) {
-      statusBarItem.text = status.text;
-      statusBarItem.tooltip = status.tooltip;
-      statusBarItem.backgroundColor = undefined;
-    }
   }
 }
 
