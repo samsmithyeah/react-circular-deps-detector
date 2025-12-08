@@ -478,32 +478,28 @@ export class TypeChecker {
   }
 
   /**
-   * Find a node at a specific line with a given name
+   * Find a node at a specific line with a given name.
+   * Finds all matching nodes and returns the most specific one (smallest span).
    */
   private findNodeAtLine(
     sourceFile: ts.SourceFile,
     line: number,
     name: string
   ): ts.Node | undefined {
-    let result: ts.Node | undefined;
+    const candidates: ts.Node[] = [];
 
     const visit = (node: ts.Node): void => {
-      if (result) return;
-
       const nodeStart = sourceFile.getLineAndCharacterOfPosition(node.getStart());
       // TypeScript lines are 0-based, our lines are 1-based
       if (nodeStart.line === line - 1) {
         if (ts.isIdentifier(node) && node.text === name) {
-          result = node;
-          return;
-        }
-        if (
+          candidates.push(node);
+        } else if (
           ts.isVariableDeclaration(node) &&
           ts.isIdentifier(node.name) &&
           node.name.text === name
         ) {
-          result = node;
-          return;
+          candidates.push(node);
         }
       }
 
@@ -511,29 +507,36 @@ export class TypeChecker {
     };
 
     visit(sourceFile);
-    return result;
+
+    // Return the smallest (most specific) matching node
+    if (candidates.length === 0) return undefined;
+    if (candidates.length === 1) return candidates[0];
+
+    return candidates.reduce((smallest, node) => {
+      const smallestSpan = smallest.getEnd() - smallest.getStart();
+      const nodeSpan = node.getEnd() - node.getStart();
+      return nodeSpan < smallestSpan ? node : smallest;
+    });
   }
 
   /**
-   * Find a call expression at a specific line
+   * Find a call expression at a specific line.
+   * Finds all matching call expressions and returns the most specific one (smallest span).
    */
   private findCallExpressionAtLine(
     sourceFile: ts.SourceFile,
     line: number,
     functionName: string
   ): ts.CallExpression | undefined {
-    let result: ts.CallExpression | undefined;
+    const candidates: ts.CallExpression[] = [];
 
     const visit = (node: ts.Node): void => {
-      if (result) return;
-
       const nodeStart = sourceFile.getLineAndCharacterOfPosition(node.getStart());
       if (nodeStart.line === line - 1) {
         if (ts.isCallExpression(node)) {
           const calleeText = node.expression.getText(sourceFile);
           if (calleeText === functionName || calleeText.endsWith(`.${functionName}`)) {
-            result = node;
-            return;
+            candidates.push(node);
           }
         }
       }
@@ -542,7 +545,16 @@ export class TypeChecker {
     };
 
     visit(sourceFile);
-    return result;
+
+    // Return the smallest (most specific) matching call expression
+    if (candidates.length === 0) return undefined;
+    if (candidates.length === 1) return candidates[0];
+
+    return candidates.reduce((smallest, node) => {
+      const smallestSpan = smallest.getEnd() - smallest.getStart();
+      const nodeSpan = node.getEnd() - node.getStart();
+      return nodeSpan < smallestSpan ? node : smallest;
+    });
   }
 
   /**

@@ -3,6 +3,7 @@ import { RuleTester } from 'eslint';
 import noRenderPhaseSetState from '../src/rules/no-render-phase-setstate';
 import noEffectLoop from '../src/rules/no-effect-loop';
 import noUnstableDeps from '../src/rules/no-unstable-deps';
+import noUnstableVariableDeps from '../src/rules/no-unstable-variable-deps';
 import noMissingDepsArray from '../src/rules/no-missing-deps-array';
 
 // Configure rule tester with parser for TypeScript/JSX
@@ -196,6 +197,153 @@ describe('no-unstable-deps', () => {
           }
         `,
         errors: [{ messageId: 'unstableFunction' }],
+      },
+    ],
+  });
+});
+
+describe('no-unstable-variable-deps', () => {
+  ruleTester.run('no-unstable-variable-deps', noUnstableVariableDeps, {
+    valid: [
+      // Memoized object is stable
+      `
+        function Component() {
+          const config = useMemo(() => ({ key: 'value' }), []);
+          useEffect(() => {
+            console.log(config);
+          }, [config]);
+        }
+      `,
+      // Memoized callback is stable
+      `
+        function Component() {
+          const handler = useCallback(() => console.log('click'), []);
+          useEffect(() => {
+            document.addEventListener('click', handler);
+          }, [handler]);
+        }
+      `,
+      // State variables are stable
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {
+            console.log(count);
+          }, [count]);
+        }
+      `,
+      // Ref variables are stable
+      `
+        function Component() {
+          const ref = useRef(null);
+          useEffect(() => {
+            console.log(ref.current);
+          }, [ref]);
+        }
+      `,
+      // Primitive values are stable
+      `
+        function Component() {
+          const count = 5;
+          useEffect(() => {
+            console.log(count);
+          }, [count]);
+        }
+      `,
+      // Props are not tracked (external to component)
+      `
+        function Component({ config }) {
+          useEffect(() => {
+            console.log(config);
+          }, [config]);
+        }
+      `,
+    ],
+    invalid: [
+      // Object created in component
+      {
+        code: `
+          function Component() {
+            const config = { key: 'value' };
+            useEffect(() => {
+              console.log(config);
+            }, [config]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectVariable' }],
+      },
+      // Array created in component
+      {
+        code: `
+          function Component() {
+            const items = [1, 2, 3];
+            useEffect(() => {
+              console.log(items);
+            }, [items]);
+          }
+        `,
+        errors: [{ messageId: 'unstableArrayVariable' }],
+      },
+      // Arrow function created in component
+      {
+        code: `
+          function Component() {
+            const handler = () => console.log('click');
+            useEffect(() => {
+              document.addEventListener('click', handler);
+            }, [handler]);
+          }
+        `,
+        errors: [{ messageId: 'unstableFunctionVariable' }],
+      },
+      // Function expression created in component
+      {
+        code: `
+          function Component() {
+            const handler = function() { console.log('click'); };
+            useEffect(() => {
+              document.addEventListener('click', handler);
+            }, [handler]);
+          }
+        `,
+        errors: [{ messageId: 'unstableFunctionVariable' }],
+      },
+      // Object in useCallback deps
+      {
+        code: `
+          function Component() {
+            const options = { method: 'GET' };
+            const fetch = useCallback(() => {
+              console.log(options);
+            }, [options]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectVariable' }],
+      },
+      // Object in useMemo deps
+      {
+        code: `
+          function Component() {
+            const config = { key: 'value' };
+            const result = useMemo(() => {
+              return process(config);
+            }, [config]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectVariable' }],
+      },
+      // Multiple unstable deps
+      {
+        code: `
+          function Component() {
+            const config = { key: 'value' };
+            const items = [1, 2, 3];
+            useEffect(() => {
+              console.log(config, items);
+            }, [config, items]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectVariable' }, { messageId: 'unstableArrayVariable' }],
       },
     ],
   });

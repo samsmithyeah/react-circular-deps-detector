@@ -335,17 +335,26 @@ export function isAstNode(value: unknown): value is TSESTree.Node {
 }
 
 /**
+ * Result from finding setter calls - includes the node, setter name, and associated state
+ */
+export interface SetterCallInfo {
+  node: TSESTree.CallExpression;
+  setter: string;
+  state: string | null;
+}
+
+/**
  * Find all setter calls in a function body.
- * Returns an array of setter names found.
+ * Returns an array of setter call information.
  *
  * @param body - The AST node to search
- * @param isSetterFn - Function to check if a name is a setter
+ * @param getStateFn - Function to get the state name from a setter name (returns null if not a setter)
  */
-export function findSetterCallsInBody(
+export function findSetterCallsWithInfo(
   body: TSESTree.Node,
-  isSetterFn: (name: string) => boolean
-): string[] {
-  const setters: string[] = [];
+  getStateFn: (name: string) => string | null
+): SetterCallInfo[] {
+  const calls: SetterCallInfo[] = [];
   const visited = new WeakSet<TSESTree.Node>();
 
   function visit(node: TSESTree.Node) {
@@ -353,9 +362,11 @@ export function findSetterCallsInBody(
     visited.add(node);
 
     if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
-      const name = node.callee.name;
-      if (isSetterFn(name)) {
-        setters.push(name);
+      const setterName = node.callee.name;
+      const state = getStateFn(setterName);
+
+      if (state !== null) {
+        calls.push({ node: node as TSESTree.CallExpression, setter: setterName, state });
       }
     }
 
@@ -378,5 +389,21 @@ export function findSetterCallsInBody(
   }
 
   visit(body);
-  return setters;
+  return calls;
+}
+
+/**
+ * Find all setter calls in a function body.
+ * Returns an array of setter names found.
+ * This is a simpler version that just returns the names.
+ *
+ * @param body - The AST node to search
+ * @param isSetterFn - Function to check if a name is a setter
+ */
+export function findSetterCallsInBody(
+  body: TSESTree.Node,
+  isSetterFn: (name: string) => boolean
+): string[] {
+  const result = findSetterCallsWithInfo(body, (name) => (isSetterFn(name) ? name : null));
+  return result.map((info) => info.setter);
 }

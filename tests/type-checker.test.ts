@@ -284,6 +284,11 @@ function getReadonlyData(): Readonly<{ value: number }> {
   return { value: 42 };
 }
 
+// Line 17: Call sites for testing getFunctionReturnType
+const stableData = useData();
+const mutableData = useMutableData();
+const readonlyData = getReadonlyData();
+
 export { useData, useMutableData, getReadonlyData };
 `
     );
@@ -322,9 +327,26 @@ export { useData, useMutableData, getReadonlyData };
     const initialized = checker.initialize();
     expect(initialized).toBe(true);
 
-    // Call getFunctionReturnType to verify it doesn't crash
-    // The actual result may be null depending on TypeScript's analysis
-    checker.getFunctionReturnType(testFile, 2, 'useData');
+    // Test useData() call at line 17 - returns Readonly<...> so should be stable
+    const useDataInfo = checker.getFunctionReturnType(testFile, 17, 'useData');
+    expect(useDataInfo).not.toBeNull();
+    if (useDataInfo) {
+      expect(useDataInfo.isStableReturn).toBe(true);
+    }
+
+    // Test useMutableData() call at line 18 - returns mutable type so should not be stable
+    const useMutableDataInfo = checker.getFunctionReturnType(testFile, 18, 'useMutableData');
+    expect(useMutableDataInfo).not.toBeNull();
+    if (useMutableDataInfo) {
+      expect(useMutableDataInfo.isStableReturn).toBe(false);
+    }
+
+    // Test getReadonlyData() call at line 19 - returns Readonly<...> so should be stable
+    const getReadonlyDataInfo = checker.getFunctionReturnType(testFile, 19, 'getReadonlyData');
+    expect(getReadonlyDataInfo).not.toBeNull();
+    if (getReadonlyDataInfo) {
+      expect(getReadonlyDataInfo.isStableReturn).toBe(true);
+    }
 
     // Verify the checker doesn't crash
     expect(checker.getInitError()).toBeNull();

@@ -31,7 +31,7 @@ import {
   getStateNameFromSetter,
   STATE_HOOKS,
   EFFECT_HOOKS,
-  isAstNode,
+  findSetterCallsWithInfo,
 } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
@@ -178,54 +178,6 @@ export default createRule<[Options], MessageIds>({
     }
 
     /**
-     * Find all setter calls in a function body
-     */
-    function findSetterCalls(
-      body: TSESTree.Node
-    ): Array<{ node: TSESTree.CallExpression; setter: string; state: string }> {
-      const calls: Array<{
-        node: TSESTree.CallExpression;
-        setter: string;
-        state: string;
-      }> = [];
-      const visited = new WeakSet<TSESTree.Node>();
-
-      function visit(node: TSESTree.Node) {
-        if (visited.has(node)) return;
-        visited.add(node);
-
-        if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
-          const setterName = node.callee.name;
-          const state = getStateFromSetter(setterName);
-
-          if (state) {
-            calls.push({ node, setter: setterName, state });
-          }
-        }
-
-        // Recursively visit children (skip 'parent' and 'loc' to avoid non-node objects)
-        for (const key of Object.keys(node)) {
-          if (key === 'parent' || key === 'loc' || key === 'range') continue;
-          const value = (node as unknown as Record<string, unknown>)[key];
-          if (value && typeof value === 'object') {
-            if (Array.isArray(value)) {
-              for (const item of value) {
-                if (isAstNode(item)) {
-                  visit(item);
-                }
-              }
-            } else if (isAstNode(value)) {
-              visit(value);
-            }
-          }
-        }
-      }
-
-      visit(body);
-      return calls;
-    }
-
-    /**
      * Analyze an effect hook for loop patterns
      */
     function analyzeEffectHook(node: TSESTree.CallExpression) {
@@ -248,10 +200,12 @@ export default createRule<[Options], MessageIds>({
       const deps = getDependencies(node);
       if (deps.size === 0) return; // No deps = no loop from deps
 
-      // Find setter calls in the callback
-      const setterCalls = findSetterCalls(callback.body);
+      // Find setter calls in the callback using the shared utility
+      const setterCalls = findSetterCallsWithInfo(callback.body, getStateFromSetter);
 
       for (const { node: setterNode, setter, state } of setterCalls) {
+        // Skip if state is null (shouldn't happen but TypeScript needs it)
+        if (state === null) continue;
         // Check if the state variable is in dependencies
         if (!deps.has(state)) continue;
 
