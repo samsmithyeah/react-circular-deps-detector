@@ -509,6 +509,21 @@ function findSettersInCallbacks(
       return;
     }
 
+    // Try statement - catch block is conditional on an error being thrown
+    if (t.isTryStatement(node)) {
+      visit(node.block, newAncestors);
+      if (node.handler) {
+        // The catch block is conditional on an error being thrown
+        markConditional(node.handler.body, ctx);
+        visit(node.handler.body, newAncestors);
+      }
+      if (node.finalizer) {
+        // The finally block executes regardless of an error
+        visit(node.finalizer, newAncestors);
+      }
+      return;
+    }
+
     // Use VISITOR_KEYS for generic traversal of other node types
     const keys = t.VISITOR_KEYS[node.type];
     if (!keys) return;

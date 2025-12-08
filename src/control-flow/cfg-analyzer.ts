@@ -199,13 +199,6 @@ function analyzePathGuard(conditions: PathCondition[]): GuardAnalysis {
   for (const condition of conditions) {
     const node = condition.conditionNode;
 
-    // Early return pattern: if (condition) return;
-    // If we're on the false branch of such a check, we passed the guard
-    if (condition.branchTaken === 'false') {
-      // Check if true branch is a return
-      // This would be detected at a higher level
-    }
-
     // Equality guard: if (x !== newValue) setX(newValue)
     if (t.isBinaryExpression(node)) {
       const analysis = analyzeEqualityGuard(node, condition.branchTaken);
@@ -216,12 +209,6 @@ function analyzePathGuard(conditions: PathCondition[]): GuardAnalysis {
     if (t.isUnaryExpression(node) && node.operator === '!') {
       const analysis = analyzeToggleGuard(node, condition.branchTaken);
       if (analysis) return analysis;
-    }
-
-    // Simple identifier check: if (flag) ...
-    if (t.isIdentifier(node)) {
-      // This is a truthy check
-      // Whether it's effective depends on what's being set
     }
   }
 
