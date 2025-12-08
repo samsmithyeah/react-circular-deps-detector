@@ -28,6 +28,7 @@ import {
   generateCodeActions,
 } from './diagnostics-mapper.js';
 import { IncrementalCache } from './incremental-cache.js';
+import { fileUriToPath } from './utils.js';
 
 // Create connection and document manager
 const connection = createConnection(ProposedFeatures.all);
@@ -317,8 +318,11 @@ async function runSingleFileAnalysis(uri: string, content: string): Promise<void
     let parsed: ParsedFile;
     try {
       parsed = parseFile(filePath);
-    } catch {
-      // Parse error - clear diagnostics for this file
+    } catch (error) {
+      // Parse error - log and clear diagnostics for this file
+      connection.console.error(
+        `Failed to parse ${filePath}: ${error instanceof Error ? error.message : String(error)}`
+      );
       connection.sendDiagnostics({ uri, diagnostics: [] });
       return;
     }
@@ -471,18 +475,6 @@ function clearAllDiagnostics(): void {
 function isReactFile(uri: string): boolean {
   const extensions = ['.ts', '.tsx', '.js', '.jsx'];
   return extensions.some((ext) => uri.endsWith(ext));
-}
-
-function fileUriToPath(uri: string): string {
-  if (uri.startsWith('file://')) {
-    // Handle Windows paths (file:///C:/...)
-    let path = decodeURIComponent(uri.slice(7));
-    if (path.match(/^\/[A-Za-z]:/)) {
-      path = path.slice(1);
-    }
-    return path;
-  }
-  return uri;
 }
 
 // Status notification helpers

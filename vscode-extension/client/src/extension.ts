@@ -19,6 +19,13 @@ let client: LanguageClient;
 let statusBarItem: StatusBarItem;
 let lastIssueCount = 0;
 
+interface RldStats {
+  cachedFiles: number;
+  dependencyEdges: number;
+  totalIssues: number;
+  crossFileCycles: number;
+}
+
 // Status bar states
 const STATUS = {
   ready: { text: '$(shield) RLD', tooltip: 'React Loop Detector - Ready' },
@@ -45,14 +52,15 @@ const STATUS = {
 };
 
 function updateStatusBar(state: keyof typeof STATUS, issueCount?: number): void {
+  const statusEntry = STATUS[state];
   let status: { text: string; tooltip: string } | undefined;
 
-  if (state === 'readyWithIssues') {
+  if (typeof statusEntry === 'function') {
     if (issueCount !== undefined) {
-      status = STATUS.readyWithIssues(issueCount);
+      status = statusEntry(issueCount);
     }
   } else {
-    status = STATUS[state];
+    status = statusEntry;
   }
 
   if (status) {
@@ -125,7 +133,9 @@ export function activate(context: ExtensionContext): void {
         window.showInformationMessage('React Loop Detector: Analysis complete');
       } catch (error) {
         updateStatusBar('error');
-        window.showErrorMessage(`React Loop Detector: Analysis failed - ${error}`);
+        window.showErrorMessage(
+          `React Loop Detector: Analysis failed - ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     })
   );
@@ -138,7 +148,9 @@ export function activate(context: ExtensionContext): void {
         updateStatusBar('ready');
         window.showInformationMessage('React Loop Detector: Cache cleared');
       } catch (error) {
-        window.showErrorMessage(`React Loop Detector: Failed to clear cache - ${error}`);
+        window.showErrorMessage(
+          `React Loop Detector: Failed to clear cache - ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     })
   );
@@ -146,12 +158,7 @@ export function activate(context: ExtensionContext): void {
   context.subscriptions.push(
     commands.registerCommand('reactLoopDetector.showStats', async () => {
       try {
-        const stats = (await client.sendRequest('reactLoopDetector/getStats')) as {
-          cachedFiles: number;
-          dependencyEdges: number;
-          totalIssues: number;
-          crossFileCycles: number;
-        };
+        const stats = (await client.sendRequest('reactLoopDetector/getStats')) as RldStats;
 
         window.showInformationMessage(
           `React Loop Detector Stats:\n` +
@@ -161,7 +168,9 @@ export function activate(context: ExtensionContext): void {
             `Cross-file cycles: ${stats.crossFileCycles}`
         );
       } catch (error) {
-        window.showErrorMessage(`React Loop Detector: Failed to get stats - ${error}`);
+        window.showErrorMessage(
+          `React Loop Detector: Failed to get stats - ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     })
   );

@@ -9,6 +9,7 @@ import {
   TextEdit,
 } from 'vscode-languageserver';
 import type { IntelligentHookAnalysis, CrossFileCycle } from 'react-loop-detector';
+import { fileUriToPath } from './utils.js';
 
 /**
  * Maps IntelligentHookAnalysis results to LSP Diagnostics
@@ -142,21 +143,9 @@ function formatMessage(issue: IntelligentHookAnalysis): string {
   return baseMessage;
 }
 
-function fileUriToPath(uri: string): string {
-  if (uri.startsWith('file://')) {
-    // Handle Windows paths (file:///C:/...)
-    let path = decodeURIComponent(uri.slice(7));
-    if (path.match(/^\/[A-Za-z]:/)) {
-      path = path.slice(1);
-    }
-    return path;
-  }
-  return uri;
-}
-
 function normalizeFilePath(filePath: string): string {
-  // Normalize path separators and resolve . and ..
-  return filePath.replace(/\\/g, '/').toLowerCase();
+  // Normalize path separators (keep case-sensitive for Linux compatibility)
+  return filePath.replace(/\\/g, '/');
 }
 
 function getFileName(filePath: string): string {

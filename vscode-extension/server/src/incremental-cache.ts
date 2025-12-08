@@ -247,7 +247,8 @@ export class IncrementalCache {
   }
 
   private normalizePath(filePath: string): string {
-    return filePath.replace(/\\/g, '/').toLowerCase();
+    // Normalize path separators (keep case-sensitive for Linux compatibility)
+    return filePath.replace(/\\/g, '/');
   }
 
   private computeHash(content: string): string {
