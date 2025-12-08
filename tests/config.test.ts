@@ -91,10 +91,14 @@ describe('Config', () => {
       const configPath = path.join(configFixturePath, 'rld.config.json');
       fs.writeFileSync(configPath, 'invalid json {{{');
 
+      // Suppress expected warning
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
       // Should not throw, should return default config
       const config = loadConfig(configFixturePath);
       expect(config).toEqual(DEFAULT_CONFIG);
 
+      warnSpy.mockRestore();
       fs.unlinkSync(configPath);
     });
   });

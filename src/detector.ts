@@ -44,6 +44,10 @@ export interface DetectorOptions {
   parallel?: boolean;
   /** Number of worker threads (default: number of CPU cores) */
   workers?: number;
+  /** Enable TypeScript strict mode for type-based stability detection */
+  strict?: boolean;
+  /** Custom path to tsconfig.json (for strict mode) */
+  tsconfigPath?: string;
 }
 
 // Minimum file count to benefit from parallel processing
@@ -97,6 +101,9 @@ export async function detectCircularDependencies(
     unstableHooks: config.unstableHooks,
     customFunctions: config.customFunctions,
     debug: options.debug,
+    strictMode: options.strict || config.strictMode,
+    tsconfigPath: options.tsconfigPath || config.tsconfigPath,
+    projectRoot: targetPath,
   });
 
   // Filter results based on config

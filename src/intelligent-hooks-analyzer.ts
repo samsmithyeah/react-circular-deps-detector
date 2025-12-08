@@ -5,6 +5,7 @@ import * as path from 'path';
 import { ParsedFile, parseFile } from './parser';
 import { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analyzer';
 import { createPathResolver, PathResolver } from './path-resolver';
+import { TypeChecker, createTypeChecker } from './type-checker';
 
 interface HookNodeInfo {
   node: t.CallExpression;
@@ -685,6 +686,12 @@ export interface AnalyzerOptions {
   >;
   /** Enable debug mode to collect detailed decision information */
   debug?: boolean;
+  /** Enable TypeScript strict mode for type-based stability detection */
+  strictMode?: boolean;
+  /** Custom path to tsconfig.json (for strict mode) */
+  tsconfigPath?: string;
+  /** Project root directory (required for strict mode) */
+  projectRoot?: string;
 }
 
 /**
@@ -698,6 +705,11 @@ export interface AnalyzerOptions {
  */
 let currentOptions: AnalyzerOptions = {};
 
+/**
+ * Module-level type checker instance (only created when strict mode is enabled).
+ */
+let typeChecker: TypeChecker | null = null;
+
 export function analyzeHooksIntelligently(
   parsedFiles: ParsedFile[],
   options: AnalyzerOptions = {}
@@ -707,9 +719,44 @@ export function analyzeHooksIntelligently(
   // Store options for helper functions
   currentOptions = options;
 
+  // Initialize type checker if strict mode is enabled
+  if (options.strictMode && options.projectRoot) {
+    typeChecker = createTypeChecker({
+      projectRoot: options.projectRoot,
+      tsconfigPath: options.tsconfigPath,
+      cacheTypes: true,
+    });
+
+    const initialized = typeChecker.initialize();
+    if (!initialized) {
+      const error = typeChecker.getInitError();
+      if (
+        process.env.NODE_ENV !== 'test' &&
+        !process.argv.includes('--json') &&
+        !process.argv.includes('--sarif')
+      ) {
+        console.warn(`Warning: Could not initialize TypeScript type checker: ${error?.message}`);
+        console.warn('Falling back to heuristic-based stability detection.');
+      }
+      typeChecker = null;
+    } else if (
+      process.env.NODE_ENV !== 'test' &&
+      !process.argv.includes('--json') &&
+      !process.argv.includes('--sarif')
+    ) {
+      console.log('TypeScript type checker initialized for strict mode analysis.');
+    }
+  } else {
+    typeChecker = null;
+  }
+
   // First, build cross-file analysis including imported utilities
   // Only show progress if not in test mode and not generating JSON output
-  if (process.env.NODE_ENV !== 'test' && !process.argv.includes('--json')) {
+  if (
+    process.env.NODE_ENV !== 'test' &&
+    !process.argv.includes('--json') &&
+    !process.argv.includes('--sarif')
+  ) {
     console.log('Building cross-file function call graph...');
   }
   const allFiles = expandToIncludeImportedFiles(parsedFiles);
@@ -722,6 +769,12 @@ export function analyzeHooksIntelligently(
     } catch (error) {
       console.warn(`Could not analyze hooks intelligently in ${file.file}:`, error);
     }
+  }
+
+  // Cleanup type checker
+  if (typeChecker) {
+    typeChecker.dispose();
+    typeChecker = null;
   }
 
   return results;
@@ -757,6 +810,30 @@ export function isConfiguredDeferredFunction(functionName: string): boolean {
   return currentOptions.customFunctions?.[functionName]?.deferred ?? false;
 }
 
+/**
+ * Check if a function call returns a stable type using TypeScript type checker.
+ * Returns null if type checker is not available or cannot determine stability.
+ */
+function checkFunctionReturnStability(
+  filePath: string,
+  line: number,
+  functionName: string
+): boolean | null {
+  if (!typeChecker) {
+    return null;
+  }
+
+  try {
+    const returnInfo = typeChecker.getFunctionReturnType(filePath, line, functionName);
+    if (!returnInfo) {
+      return null;
+    }
+    return returnInfo.isStableReturn;
+  } catch {
+    return null;
+  }
+}
+
 function analyzeFileIntelligently(
   file: ParsedFile,
   crossFileAnalysis: CrossFileAnalysis
@@ -771,7 +848,8 @@ function analyzeFileIntelligently(
     const { stateVariables: stateInfo, refVariables: refVars } = extractStateInfo(ast);
 
     // Extract unstable local variables (objects, arrays, functions created in component body)
-    const unstableVars = extractUnstableVariables(ast);
+    // Pass file path for type-aware stability checking in strict mode
+    const unstableVars = extractUnstableVariables(ast, file.file);
 
     // Check for setState during render (outside hooks/event handlers)
     const renderStateIssues = detectSetStateDuringRender(ast, stateInfo, file.file, file.content);
@@ -1035,10 +1113,46 @@ const STABLE_REACT_HOOKS = new Set([
 ]);
 
 /**
- * Check if a CallExpression is a stable function call (returns primitive or stable value)
+ * Context for type-aware stability checking
  */
-function isStableFunctionCall(init: t.CallExpression): boolean {
+interface StabilityCheckContext {
+  filePath?: string;
+  line?: number;
+}
+
+/**
+ * Check if a CallExpression is a stable function call (returns primitive or stable value)
+ *
+ * When TypeScript strict mode is enabled and context is provided, this function
+ * will use the TypeScript compiler API to determine actual return type stability
+ * instead of relying purely on heuristics.
+ */
+function isStableFunctionCall(init: t.CallExpression, context?: StabilityCheckContext): boolean {
   const callee = init.callee;
+
+  // In strict mode with type checker, try to determine stability from actual types first
+  if (typeChecker && context?.filePath && context?.line) {
+    let functionName: string | null = null;
+
+    if (t.isIdentifier(callee)) {
+      functionName = callee.name;
+    } else if (t.isMemberExpression(callee) && t.isIdentifier(callee.property)) {
+      functionName = callee.property.name;
+    }
+
+    if (functionName) {
+      const typeStability = checkFunctionReturnStability(
+        context.filePath,
+        context.line,
+        functionName
+      );
+      if (typeStability !== null) {
+        // Type checker gave us a definitive answer
+        return typeStability;
+      }
+      // Fall through to heuristics if type checker couldn't determine
+    }
+  }
 
   // Only specific React hooks are guaranteed to return stable references
   if (t.isIdentifier(callee) && STABLE_REACT_HOOKS.has(callee.name)) {
@@ -1155,12 +1269,14 @@ function addUnstableDestructuredVariables(
   id: t.LVal,
   init: t.Expression | null | undefined,
   line: number,
-  unstableVars: Map<string, UnstableVariable>
+  unstableVars: Map<string, UnstableVariable>,
+  filePath?: string
 ): void {
   if (!init) return;
 
+  const context: StabilityCheckContext | undefined = filePath ? { filePath, line } : undefined;
   const isUnstableSource =
-    (t.isCallExpression(init) && !isStableFunctionCall(init)) ||
+    (t.isCallExpression(init) && !isStableFunctionCall(init, context)) ||
     t.isArrayExpression(init) ||
     t.isObjectExpression(init);
 
@@ -1182,8 +1298,11 @@ function addUnstableDestructuredVariables(
  * Extract local variables that are potentially unstable (recreated on each render).
  * This includes object literals, array literals, functions, and function call results
  * that are defined inside a component but not wrapped in useMemo/useCallback/useRef.
+ *
+ * @param ast - The AST node to analyze
+ * @param filePath - Optional file path for type-aware stability checking in strict mode
  */
-function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
+function extractUnstableVariables(ast: t.Node, filePath?: string): Map<string, UnstableVariable> {
   const unstableVars = new Map<string, UnstableVariable>();
   const memoizedVars = new Set<string>();
   const stateVars = new Set<string>();
@@ -1259,13 +1378,16 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         }
 
         // Skip stable function calls (React hooks, parseInt, etc.)
-        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+        const context: StabilityCheckContext | undefined = filePath
+          ? { filePath, line }
+          : undefined;
+        if (t.isCallExpression(init) && isStableFunctionCall(init, context)) {
           return;
         }
 
         // Inside component: destructuring from unstable source
         if (componentDepth > 0) {
-          addUnstableDestructuredVariables(id, init, line, unstableVars);
+          addUnstableDestructuredVariables(id, init, line, unstableVars, filePath);
         }
         return;
       }
@@ -1310,13 +1432,16 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         }
 
         // Skip stable function calls (React hooks, parseInt, etc.)
-        if (t.isCallExpression(init) && isStableFunctionCall(init)) {
+        const objContext: StabilityCheckContext | undefined = filePath
+          ? { filePath, line }
+          : undefined;
+        if (t.isCallExpression(init) && isStableFunctionCall(init, objContext)) {
           return;
         }
 
         // Inside component: destructuring from unstable source
         if (componentDepth > 0) {
-          addUnstableDestructuredVariables(id, init, line, unstableVars);
+          addUnstableDestructuredVariables(id, init, line, unstableVars, filePath);
         }
         return;
       }
@@ -1415,7 +1540,10 @@ function extractUnstableVariables(ast: t.Node): Map<string, UnstableVariable> {
         // Function call that likely returns new object/array: const config = createConfig()
         else if (t.isCallExpression(init)) {
           // Skip stable function calls (React hooks, parseInt, etc.)
-          if (isStableFunctionCall(init)) {
+          const callContext: StabilityCheckContext | undefined = filePath
+            ? { filePath, line }
+            : undefined;
+          if (isStableFunctionCall(init, callContext)) {
             return;
           }
           // Other function calls may return new objects
@@ -1544,23 +1672,49 @@ function hasUnconditionalSetState(effectBody: t.Node, stateInfo: Map<string, str
         }
       }
 
-      // Check for async patterns - increment depth for their callbacks
-      const isAsyncCallback =
-        (t.isIdentifier(callee) &&
-          ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name)) ||
-        (t.isMemberExpression(callee) &&
-          t.isIdentifier(callee.property) &&
-          ['then', 'catch', 'finally'].includes(callee.property.name));
+      // Check for truly deferred patterns (setTimeout, setInterval, etc.)
+      // These callbacks might never run (could be cleared), so treat as conditional
+      const isTrulyDeferredCallback =
+        t.isIdentifier(callee) &&
+        ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name);
 
-      if (isAsyncCallback) {
-        // Walk arguments with increased depth (callbacks inside are deferred)
+      if (isTrulyDeferredCallback) {
+        // Walk arguments with increased depth (callbacks inside are truly deferred)
         for (const arg of node.arguments) {
           if (t.isExpression(arg) || t.isSpreadElement(arg)) {
             walk(arg, conditionalDepth + 1);
           }
         }
-        // Walk the callee too (for chained .then().catch())
-        walk(callee, conditionalDepth);
+        return;
+      }
+
+      // Check for promise .then()/.catch()/.finally() - these are NOT truly conditional
+      // If the promise is called unconditionally and resolves, the .then() WILL run
+      // This is important for detecting infinite loops like:
+      //   fetchData().then(result => setState(result))
+      // where setState is called unconditionally when the promise resolves
+      const isPromiseCallback =
+        t.isMemberExpression(callee) &&
+        t.isIdentifier(callee.property) &&
+        ['then', 'catch', 'finally'].includes(callee.property.name);
+
+      if (isPromiseCallback) {
+        // Walk the promise chain (the callee object) at current depth
+        walk(callee.object, conditionalDepth);
+        // For promise callbacks, we need to walk INTO the function body
+        // (unlike regular nested functions which aren't executed immediately)
+        // because the callback WILL be executed when the promise resolves
+        for (const arg of node.arguments) {
+          if (t.isArrowFunctionExpression(arg)) {
+            // Walk into the arrow function body at current conditional depth
+            walk(arg.body, conditionalDepth);
+          } else if (t.isFunctionExpression(arg)) {
+            // Walk into the function expression body at current conditional depth
+            walk(arg.body, conditionalDepth);
+          } else if (t.isExpression(arg) || t.isSpreadElement(arg)) {
+            walk(arg, conditionalDepth);
+          }
+        }
         return;
       }
 

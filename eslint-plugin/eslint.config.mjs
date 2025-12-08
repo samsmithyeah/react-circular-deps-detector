@@ -9,7 +9,6 @@ const tsRules = {
     { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
   ],
   '@typescript-eslint/no-explicit-any': 'warn',
-  '@typescript-eslint/no-require-imports': 'off',
 };
 
 export default tseslint.config(
@@ -17,21 +16,10 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: [
-      'dist/',
-      'node_modules/',
-      'coverage/',
-      'tests/fixtures/',
-      'test-files/',
-      'test-indirect-update.tsx',
-      'test-indirect-utils.ts',
-      'debug-test.js',
-      'eslint-plugin/dist/',
-      'eslint-plugin/tests/',
-    ],
+    ignores: ['dist/', 'node_modules/', 'coverage/'],
   },
   {
-    files: ['**/*.js'],
+    files: ['*.js'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -57,7 +45,7 @@ export default tseslint.config(
     },
     rules: {
       ...tsRules,
-      'no-control-regex': 'off',
+      '@typescript-eslint/ban-ts-comment': 'off',
     },
   }
 );

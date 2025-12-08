@@ -54,6 +54,20 @@ export interface RcdConfig {
       deferred?: boolean;
     }
   >;
+
+  /**
+   * Enable strict mode using TypeScript Compiler API for more accurate stability detection.
+   * Requires a TypeScript project with tsconfig.json.
+   * This mode is slower but provides type-based stability analysis instead of heuristics.
+   * @default false
+   */
+  strictMode?: boolean;
+
+  /**
+   * Custom path to tsconfig.json (only used when strictMode is enabled)
+   * If not specified, will search upward from the target directory.
+   */
+  tsconfigPath?: string;
 }
 
 const CONFIG_FILES = ['rld.config.js', 'rld.config.json', '.rldrc', '.rldrc.json'];
@@ -69,6 +83,8 @@ export const DEFAULT_CONFIG: Required<RcdConfig> = {
   minConfidence: 'low',
   includePotentialIssues: true,
   customFunctions: {},
+  strictMode: false,
+  tsconfigPath: undefined as unknown as string,
 };
 
 /**
@@ -153,6 +169,8 @@ function mergeConfig(defaults: Required<RcdConfig>, userConfig: RcdConfig): Requ
     minConfidence: userConfig.minConfidence ?? defaults.minConfidence,
     includePotentialIssues: userConfig.includePotentialIssues ?? defaults.includePotentialIssues,
     customFunctions: { ...defaults.customFunctions, ...userConfig.customFunctions },
+    strictMode: userConfig.strictMode ?? defaults.strictMode,
+    tsconfigPath: userConfig.tsconfigPath ?? defaults.tsconfigPath,
   };
 }
 
