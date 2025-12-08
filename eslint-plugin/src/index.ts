@@ -30,6 +30,7 @@ import noEffectLoop from './rules/no-effect-loop';
 import noUnstableDeps from './rules/no-unstable-deps';
 import noUnstableVariableDeps from './rules/no-unstable-variable-deps';
 import noMissingDepsArray from './rules/no-missing-deps-array';
+import pkg from '../package.json';
 
 const rules = {
   'no-render-phase-setstate': noRenderPhaseSetState,
@@ -41,8 +42,8 @@ const rules = {
 
 const plugin = {
   meta: {
-    name: 'eslint-plugin-react-loop-detector',
-    version: '1.0.0',
+    name: pkg.name,
+    version: pkg.version,
   },
   rules,
   configs: {} as Record<string, unknown>,
