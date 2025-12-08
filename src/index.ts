@@ -70,8 +70,4 @@ export {
 } from './type-checker';
 
 // Path resolver
-export {
-  createPathResolver,
-  PathResolver,
-  PathResolverOptions,
-} from './path-resolver';
+export { createPathResolver, PathResolver, PathResolverOptions } from './path-resolver';
