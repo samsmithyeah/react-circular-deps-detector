@@ -6,6 +6,11 @@ import { ParsedFile, parseFile } from './parser';
 import { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analyzer';
 import { createPathResolver, PathResolver } from './path-resolver';
 import { TypeChecker, createTypeChecker } from './type-checker';
+import {
+  analyzeSetStateCalls,
+  hasUnconditionalSetStateCFG,
+  type SetStateAnalysis,
+} from './control-flow';
 
 interface HookNodeInfo {
   node: t.CallExpression;
@@ -1630,269 +1635,6 @@ function extractUnstableVariables(ast: t.Node, filePath?: string): Map<string, U
  * Check if a hook has unstable references in its dependency array.
  * Returns an analysis if an issue is found, null otherwise.
  */
-/**
- * Check if a useEffect/useLayoutEffect body contains unconditional setState calls.
- * Returns true if there's a setState that will ALWAYS run (not guarded by if/early return).
- *
- * Uses a simple recursive walk instead of traverse() to avoid scope issues
- * when analyzing extracted function nodes.
- */
-function hasUnconditionalSetState(effectBody: t.Node, stateInfo: Map<string, string>): boolean {
-  const setterNames = new Set(stateInfo.values());
-  let hasUnconditional = false;
-
-  // Get the actual function body (handle arrow functions and regular functions)
-  let bodyToAnalyze: t.Node | null = null;
-  if (t.isArrowFunctionExpression(effectBody)) {
-    bodyToAnalyze = effectBody.body;
-  } else if (t.isFunctionExpression(effectBody)) {
-    bodyToAnalyze = effectBody.body;
-  } else {
-    bodyToAnalyze = effectBody;
-  }
-
-  if (!bodyToAnalyze) return false;
-
-  /**
-   * Recursively walk the AST looking for unconditional setState calls.
-   * @param node - Current AST node
-   * @param conditionalDepth - How many levels of conditional context we're in
-   */
-  function walk(node: t.Node | null | undefined, conditionalDepth: number): void {
-    if (!node || hasUnconditional) return;
-
-    // Check for setState calls at this level
-    if (t.isCallExpression(node)) {
-      const callee = node.callee;
-      if (t.isIdentifier(callee) && setterNames.has(callee.name)) {
-        // This is a setState call - check if it's unconditional
-        if (conditionalDepth === 0) {
-          hasUnconditional = true;
-          return;
-        }
-      }
-
-      // Check for truly deferred patterns (setTimeout, setInterval, etc.)
-      // These callbacks might never run (could be cleared), so treat as conditional
-      const isTrulyDeferredCallback =
-        t.isIdentifier(callee) &&
-        ['setInterval', 'setTimeout', 'requestAnimationFrame'].includes(callee.name);
-
-      if (isTrulyDeferredCallback) {
-        // Walk arguments with increased depth (callbacks inside are truly deferred)
-        for (const arg of node.arguments) {
-          if (t.isExpression(arg) || t.isSpreadElement(arg)) {
-            walk(arg, conditionalDepth + 1);
-          }
-        }
-        return;
-      }
-
-      // Check for promise .then()/.catch()/.finally() - these are NOT truly conditional
-      // If the promise is called unconditionally and resolves, the .then() WILL run
-      // This is important for detecting infinite loops like:
-      //   fetchData().then(result => setState(result))
-      // where setState is called unconditionally when the promise resolves
-      const isPromiseCallback =
-        t.isMemberExpression(callee) &&
-        t.isIdentifier(callee.property) &&
-        ['then', 'catch', 'finally'].includes(callee.property.name);
-
-      if (isPromiseCallback) {
-        // Walk the promise chain (the callee object) at current depth
-        walk(callee.object, conditionalDepth);
-        // For promise callbacks, we need to walk INTO the function body
-        // (unlike regular nested functions which aren't executed immediately)
-        // because the callback WILL be executed when the promise resolves
-        for (const arg of node.arguments) {
-          if (t.isArrowFunctionExpression(arg)) {
-            // Walk into the arrow function body at current conditional depth
-            walk(arg.body, conditionalDepth);
-          } else if (t.isFunctionExpression(arg)) {
-            // Walk into the function expression body at current conditional depth
-            walk(arg.body, conditionalDepth);
-          } else if (t.isExpression(arg) || t.isSpreadElement(arg)) {
-            walk(arg, conditionalDepth);
-          }
-        }
-        return;
-      }
-
-      // Regular call - walk callee and arguments
-      walk(callee, conditionalDepth);
-      for (const arg of node.arguments) {
-        if (t.isExpression(arg) || t.isSpreadElement(arg)) {
-          walk(arg, conditionalDepth);
-        }
-      }
-      return;
-    }
-
-    // Don't traverse into nested function definitions (they're not executed immediately)
-    if (
-      t.isArrowFunctionExpression(node) ||
-      t.isFunctionExpression(node) ||
-      t.isFunctionDeclaration(node)
-    ) {
-      return;
-    }
-
-    // Conditional contexts - increase depth
-    if (t.isIfStatement(node)) {
-      walk(node.test, conditionalDepth);
-      walk(node.consequent, conditionalDepth + 1);
-      walk(node.alternate, conditionalDepth + 1);
-      return;
-    }
-
-    if (t.isConditionalExpression(node)) {
-      walk(node.test, conditionalDepth);
-      walk(node.consequent, conditionalDepth + 1);
-      walk(node.alternate, conditionalDepth + 1);
-      return;
-    }
-
-    if (t.isLogicalExpression(node)) {
-      walk(node.left, conditionalDepth);
-      // Right side of && or || is conditional
-      walk(node.right, conditionalDepth + 1);
-      return;
-    }
-
-    // Block statement - walk all statements
-    if (t.isBlockStatement(node)) {
-      for (const stmt of node.body) {
-        walk(stmt, conditionalDepth);
-      }
-      return;
-    }
-
-    // Expression statement - walk the expression
-    if (t.isExpressionStatement(node)) {
-      walk(node.expression, conditionalDepth);
-      return;
-    }
-
-    // Return statement - walk the argument
-    if (t.isReturnStatement(node)) {
-      walk(node.argument, conditionalDepth);
-      return;
-    }
-
-    // Variable declaration - walk initializers
-    if (t.isVariableDeclaration(node)) {
-      for (const decl of node.declarations) {
-        walk(decl.init, conditionalDepth);
-      }
-      return;
-    }
-
-    // Try-catch - walk all parts
-    if (t.isTryStatement(node)) {
-      walk(node.block, conditionalDepth);
-      walk(node.handler?.body, conditionalDepth + 1);
-      walk(node.finalizer, conditionalDepth);
-      return;
-    }
-
-    // For/while loops - walk body with conditional depth (may not execute)
-    if (t.isForStatement(node) || t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
-      if (t.isForStatement(node)) {
-        walk(node.init, conditionalDepth);
-        walk(node.test, conditionalDepth);
-        walk(node.update, conditionalDepth);
-      }
-      if (t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
-        walk(node.test, conditionalDepth);
-      }
-      walk(node.body, conditionalDepth + 1);
-      return;
-    }
-
-    // For-in/for-of loops
-    if (t.isForInStatement(node) || t.isForOfStatement(node)) {
-      walk(node.right, conditionalDepth);
-      walk(node.body, conditionalDepth + 1);
-      return;
-    }
-
-    // Switch statement
-    if (t.isSwitchStatement(node)) {
-      walk(node.discriminant, conditionalDepth);
-      for (const caseClause of node.cases) {
-        walk(caseClause.test, conditionalDepth);
-        for (const stmt of caseClause.consequent) {
-          walk(stmt, conditionalDepth + 1);
-        }
-      }
-      return;
-    }
-
-    // Member expression - walk object and property
-    if (t.isMemberExpression(node)) {
-      walk(node.object, conditionalDepth);
-      if (node.computed) {
-        walk(node.property, conditionalDepth);
-      }
-      return;
-    }
-
-    // Array/object expressions - walk elements
-    if (t.isArrayExpression(node)) {
-      for (const el of node.elements) {
-        walk(el, conditionalDepth);
-      }
-      return;
-    }
-
-    if (t.isObjectExpression(node)) {
-      for (const prop of node.properties) {
-        if (t.isObjectProperty(prop)) {
-          walk(prop.value, conditionalDepth);
-        }
-      }
-      return;
-    }
-
-    // Binary/unary expressions
-    if (t.isBinaryExpression(node) || t.isAssignmentExpression(node)) {
-      walk(node.left, conditionalDepth);
-      walk(node.right, conditionalDepth);
-      return;
-    }
-
-    if (t.isUnaryExpression(node) || t.isUpdateExpression(node)) {
-      walk(node.argument, conditionalDepth);
-      return;
-    }
-
-    // Sequence expression
-    if (t.isSequenceExpression(node)) {
-      for (const expr of node.expressions) {
-        walk(expr, conditionalDepth);
-      }
-      return;
-    }
-
-    // Await expression
-    if (t.isAwaitExpression(node)) {
-      walk(node.argument, conditionalDepth);
-      return;
-    }
-
-    // Template literal
-    if (t.isTemplateLiteral(node)) {
-      for (const expr of node.expressions) {
-        walk(expr, conditionalDepth);
-      }
-      return;
-    }
-  }
-
-  walk(bodyToAnalyze, 0);
-  return hasUnconditional;
-}
-
 function checkUnstableReferences(
   hookNode: HookNodeInfo,
   unstableVars: Map<string, UnstableVariable>,
@@ -1922,8 +1664,12 @@ function checkUnstableReferences(
 
   // For useEffect/useLayoutEffect, check if there are unconditional setState calls
   const isUseEffect = hookName === 'useEffect' || hookName === 'useLayoutEffect';
-  const hasUnconditionalStateUpdate =
-    isUseEffect && effectBody && hasUnconditionalSetState(effectBody, stateInfo);
+
+  // Use CFG-based analysis to check for unconditional setState calls
+  let hasUnconditionalStateUpdate = false;
+  if (isUseEffect && effectBody) {
+    hasUnconditionalStateUpdate = hasUnconditionalSetStateCFG(effectBody, stateInfo);
+  }
 
   // Check each dependency
   for (const dep of depsArray.elements) {
@@ -2064,6 +1810,17 @@ function analyzeHookNode(
   const hookBody = node.arguments[0];
   const stateInteractions = analyzeStateInteractions(hookBody, stateInfo, refVars);
 
+  // CFG-based analysis for more accurate unconditional detection
+  let cfgAnalysis: Map<string, SetStateAnalysis> | null = null;
+  if (hookBody) {
+    try {
+      cfgAnalysis = analyzeSetStateCalls(hookBody, stateInfo, dependencies);
+    } catch {
+      // CFG building can fail on very unusual code patterns
+      cfgAnalysis = null;
+    }
+  }
+
   // Check cross-file modifications for this hook
   const hookId = `${filePath}:${line}:${hookName}`;
   const crossFileModifications = crossFileAnalysis.stateSetterFlows.get(hookId) || [];
@@ -2182,7 +1939,47 @@ function analyzeHookNode(
 
     // Check direct modifications
     if (stateInteractions.modifications.includes(setter)) {
-      if (canCauseDirectLoop) {
+      // Use CFG analysis if available for more accurate unconditional detection
+      const setterCfgAnalysis = cfgAnalysis?.get(setter);
+
+      // Determine if setState is truly unconditional
+      // CFG analysis can detect early returns and complex guards the heuristic misses
+      const isUnconditionalByCFG = setterCfgAnalysis?.isUnconditional ?? true;
+      const hasEffectiveGuardByCFG = setterCfgAnalysis?.hasEffectiveGuard ?? false;
+
+      // If CFG says it's unreachable (dead code), skip
+      if (setterCfgAnalysis && !setterCfgAnalysis.isReachable) {
+        continue; // Dead code - setState never executes
+      }
+
+      // If CFG detected an effective guard, treat as safe
+      if (hasEffectiveGuardByCFG && setterCfgAnalysis?.guardAnalysis) {
+        return createAnalysis({
+          type: 'safe-pattern',
+          errorCode: 'RLD-200',
+          category: 'safe',
+          severity: 'low',
+          confidence: 'high',
+          hookType: hookName,
+          line,
+          file: filePath,
+          problematicDependency: dep,
+          stateVariable: dep,
+          setterFunction: setter,
+          actualStateModifications: [setter],
+          stateReads: stateInteractions.reads,
+          explanation: `Hook modifies '${dep}' but CFG analysis detected an effective ${setterCfgAnalysis.guardAnalysis.guardType}: ${setterCfgAnalysis.guardAnalysis.explanation}`,
+          debugInfo: {
+            reason: `CFG analysis: ${setterCfgAnalysis.explanation}`,
+            guardInfo: {
+              hasGuard: true,
+              guardType: setterCfgAnalysis.guardAnalysis.guardType,
+            },
+          },
+        });
+      }
+
+      if (canCauseDirectLoop && isUnconditionalByCFG) {
         // Determine if it's useEffect or useLayoutEffect for the error code
         const effectErrorCode: ErrorCode = hookName === 'useLayoutEffect' ? 'RLD-202' : 'RLD-200';
         return createAnalysis({
@@ -2201,7 +1998,9 @@ function analyzeHookNode(
           stateReads: stateInteractions.reads,
           explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`,
           debugInfo: {
-            reason: `Direct state modification: ${hookName} depends on '${dep}' and calls '${setter}()' unconditionally`,
+            reason: setterCfgAnalysis
+              ? `CFG analysis: ${setterCfgAnalysis.explanation}`
+              : `Direct state modification: ${hookName} depends on '${dep}' and calls '${setter}()' unconditionally`,
             stateTracking: {
               declaredStateVars: Array.from(stateInfo.keys()),
               setterFunctions: Array.from(stateInfo.values()),
@@ -2221,7 +2020,34 @@ function analyzeHookNode(
             },
           },
         });
-      } else {
+      } else if (canCauseDirectLoop && !isUnconditionalByCFG) {
+        // CFG says it's conditional - report as potential issue, not confirmed
+        return createAnalysis({
+          type: 'potential-issue',
+          errorCode: 'RLD-501',
+          category: 'warning',
+          severity: 'medium',
+          confidence: 'medium',
+          hookType: hookName,
+          line,
+          file: filePath,
+          problematicDependency: dep,
+          stateVariable: dep,
+          setterFunction: setter,
+          actualStateModifications: stateInteractions.modifications,
+          stateReads: stateInteractions.reads,
+          explanation: `${hookName} conditionally modifies '${dep}' via '${setter}()' while depending on it. Review to ensure the condition prevents infinite loops.`,
+          debugInfo: {
+            reason: setterCfgAnalysis
+              ? `CFG analysis: ${setterCfgAnalysis.explanation}`
+              : `Conditional state modification detected`,
+            guardInfo: {
+              hasGuard: true,
+              guardType: 'conditional',
+            },
+          },
+        });
+      } else if (!canCauseDirectLoop) {
         // useCallback/useMemo - can't cause loops directly
         // If it uses a functional updater, it's completely safe - don't report
         if (stateInteractions.functionalUpdates.includes(setter)) {
@@ -2581,10 +2407,9 @@ function analyzeStateInteractions(
           } else {
             interactions.conditionalModifications.push(calleeName);
           }
-        } else if (isInsideConditionalSimple(parent)) {
-          // Fallback to old logic if we couldn't analyze the guard
-          interactions.conditionalModifications.push(calleeName);
         } else {
+          // If we couldn't analyze the guard, treat as a regular modification
+          // The CFG-based analysis will determine if it's truly unconditional
           interactions.modifications.push(calleeName);
         }
 
@@ -3006,25 +2831,6 @@ function containsNode(tree: t.Node | null | undefined, target: t.Node): boolean 
   return false;
 }
 
-function isInsideConditionalSimple(parent: t.Node | null | undefined): boolean {
-  // Simple heuristic: check if we're inside an if statement block
-  // This is a simplified version that looks for common conditional patterns
-  const current = parent;
-
-  while (current) {
-    if (
-      current.type === 'IfStatement' ||
-      current.type === 'ConditionalExpression' ||
-      current.type === 'LogicalExpression'
-    ) {
-      return true;
-    }
-    // For simplicity, we'll only go up one level to avoid complexity
-    break;
-  }
-
-  return false;
-}
 
 /**
  * Check if a hook at the given line should be ignored based on comments.
