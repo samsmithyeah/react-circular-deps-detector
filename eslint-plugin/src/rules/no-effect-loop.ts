@@ -159,14 +159,21 @@ export default createRule<[Options], MessageIds>({
     /**
      * Extract dependency array identifiers from effect call
      */
-    function getDependencies(node: TSESTree.CallExpression): Set<string> {
+    function getDependencies(node: TSESTree.CallExpression, hookName: string): Set<string> {
       const deps = new Set<string>();
 
-      // Effect hooks have deps as second argument
-      if (node.arguments.length < 2) return deps;
+      let depsArg: TSESTree.Expression | TSESTree.SpreadElement | undefined;
 
-      const depsArg = node.arguments[1];
-      if (depsArg.type !== 'ArrayExpression') return deps;
+      // useImperativeHandle has deps as 3rd argument, others have it as 2nd
+      if (hookName === 'useImperativeHandle') {
+        if (node.arguments.length < 3) return deps;
+        depsArg = node.arguments[2];
+      } else {
+        if (node.arguments.length < 2) return deps;
+        depsArg = node.arguments[1];
+      }
+
+      if (!depsArg || depsArg.type !== 'ArrayExpression') return deps;
 
       for (const element of depsArg.elements) {
         if (element?.type === 'Identifier') {
@@ -197,7 +204,7 @@ export default createRule<[Options], MessageIds>({
       }
 
       // Get dependencies
-      const deps = getDependencies(node);
+      const deps = getDependencies(node, hookName);
       if (deps.size === 0) return; // No deps = no loop from deps
 
       // Find setter calls in the callback using the shared utility

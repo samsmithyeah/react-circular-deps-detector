@@ -281,16 +281,18 @@ export default createRule<[], MessageIds>({
         const hookName = isHookWithDeps(node);
         if (!hookName) return;
 
-        // Get the dependency array (last argument for most hooks)
-        const lastArg = node.arguments[node.arguments.length - 1];
-        if (!lastArg || lastArg.type !== 'ArrayExpression') return;
+        let depsArg: TSESTree.Expression | TSESTree.SpreadElement | undefined;
 
-        // For useEffect/useLayoutEffect, deps is second arg
-        // For useCallback/useMemo, deps is second arg
-        if (node.arguments.length < 2) return;
+        // useImperativeHandle has deps as 3rd argument, others have it as 2nd
+        if (hookName === 'useImperativeHandle') {
+          if (node.arguments.length < 3) return;
+          depsArg = node.arguments[2];
+        } else {
+          if (node.arguments.length < 2) return;
+          depsArg = node.arguments[1];
+        }
 
-        const depsArg = node.arguments[1];
-        if (depsArg.type !== 'ArrayExpression') return;
+        if (!depsArg || depsArg.type !== 'ArrayExpression') return;
 
         analyzeDepsArray(depsArg);
       },

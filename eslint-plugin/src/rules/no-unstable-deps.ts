@@ -148,21 +148,31 @@ export default createRule<[Options], MessageIds>({
 
     /**
      * Check if a call expression is a hook with dependencies
+     * Returns the hook name if it is, null otherwise
      */
-    function isHookWithDeps(node: TSESTree.CallExpression): boolean {
-      if (node.callee.type !== 'Identifier') return false;
-      return EFFECT_HOOKS.has(node.callee.name);
+    function isHookWithDeps(node: TSESTree.CallExpression): string | null {
+      if (node.callee.type !== 'Identifier') return null;
+      const name = node.callee.name;
+      return EFFECT_HOOKS.has(name) ? name : null;
     }
 
     return {
       CallExpression(node) {
-        if (!isHookWithDeps(node)) return;
+        const hookName = isHookWithDeps(node);
+        if (!hookName) return;
 
-        // Hooks with deps have the deps as second argument
-        if (node.arguments.length < 2) return;
+        let depsArg: TSESTree.Expression | TSESTree.SpreadElement | undefined;
 
-        const depsArg = node.arguments[1];
-        if (depsArg.type !== 'ArrayExpression') return;
+        // useImperativeHandle has deps as 3rd argument, others have it as 2nd
+        if (hookName === 'useImperativeHandle') {
+          if (node.arguments.length < 3) return;
+          depsArg = node.arguments[2];
+        } else {
+          if (node.arguments.length < 2) return;
+          depsArg = node.arguments[1];
+        }
+
+        if (!depsArg || depsArg.type !== 'ArrayExpression') return;
 
         analyzeDepsArray(depsArg);
       },

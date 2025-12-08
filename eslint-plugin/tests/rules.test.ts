@@ -163,6 +163,14 @@ describe('no-unstable-deps', () => {
           }, [Math.round(1.5)]);
         }
       `,
+      // useImperativeHandle with valid deps (3rd arg)
+      `
+        function Component(props, ref) {
+          useImperativeHandle(ref, () => ({
+            focus: () => {}
+          }), [props.value]);
+        }
+      `,
     ],
     invalid: [
       // Inline object literal
@@ -197,6 +205,17 @@ describe('no-unstable-deps', () => {
           }
         `,
         errors: [{ messageId: 'unstableFunction' }],
+      },
+      // useImperativeHandle with inline object in deps (3rd arg)
+      {
+        code: `
+          function Component(props, ref) {
+            useImperativeHandle(ref, () => ({
+              focus: () => {}
+            }), [{ key: 'value' }]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObject' }],
       },
     ],
   });
@@ -256,6 +275,15 @@ describe('no-unstable-variable-deps', () => {
           useEffect(() => {
             console.log(config);
           }, [config]);
+        }
+      `,
+      // useImperativeHandle with memoized value in deps (3rd arg)
+      `
+        function Component(props, ref) {
+          const handler = useCallback(() => {}, []);
+          useImperativeHandle(ref, () => ({
+            doSomething: handler
+          }), [handler]);
         }
       `,
     ],
@@ -344,6 +372,18 @@ describe('no-unstable-variable-deps', () => {
           }
         `,
         errors: [{ messageId: 'unstableObjectVariable' }, { messageId: 'unstableArrayVariable' }],
+      },
+      // useImperativeHandle with unstable object in deps (3rd arg)
+      {
+        code: `
+          function Component(props, ref) {
+            const config = { key: 'value' };
+            useImperativeHandle(ref, () => ({
+              getConfig: () => config
+            }), [config]);
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectVariable' }],
       },
     ],
   });
