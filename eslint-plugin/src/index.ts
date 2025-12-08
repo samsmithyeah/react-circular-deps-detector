@@ -28,12 +28,14 @@
 import noRenderPhaseSetState from './rules/no-render-phase-setstate';
 import noEffectLoop from './rules/no-effect-loop';
 import noUnstableDeps from './rules/no-unstable-deps';
+import noUnstableVariableDeps from './rules/no-unstable-variable-deps';
 import noMissingDepsArray from './rules/no-missing-deps-array';
 
 const rules = {
   'no-render-phase-setstate': noRenderPhaseSetState,
   'no-effect-loop': noEffectLoop,
   'no-unstable-deps': noUnstableDeps,
+  'no-unstable-variable-deps': noUnstableVariableDeps,
   'no-missing-deps-array': noMissingDepsArray,
 };
 
@@ -56,6 +58,7 @@ plugin.configs = {
       'react-loop-detector/no-render-phase-setstate': 'error',
       'react-loop-detector/no-effect-loop': 'error',
       'react-loop-detector/no-unstable-deps': 'warn',
+      'react-loop-detector/no-unstable-variable-deps': 'error',
       'react-loop-detector/no-missing-deps-array': 'error',
     },
   },
@@ -67,6 +70,7 @@ plugin.configs = {
       'react-loop-detector/no-render-phase-setstate': 'error',
       'react-loop-detector/no-effect-loop': 'error',
       'react-loop-detector/no-unstable-deps': 'error',
+      'react-loop-detector/no-unstable-variable-deps': 'error',
       'react-loop-detector/no-missing-deps-array': 'error',
     },
   },
