@@ -175,15 +175,29 @@ export function analyzeGuards(pathConditions: PathCondition[][]): GuardAnalysis 
     };
   }
 
-  // Check each path's conditions
-  for (const conditions of pathConditions) {
-    const analysis = analyzePathGuard(conditions);
-    if (analysis.isEffective) {
-      return analysis;
-    }
+  // Analyze all paths
+  const pathAnalyses = pathConditions.map(analyzePathGuard);
+
+  // The guard is only effective if EVERY path to the node is guarded
+  const allPathsAreGuarded = pathAnalyses.every((analysis) => analysis.isEffective);
+
+  if (allPathsAreGuarded && pathAnalyses.length > 0) {
+    // All paths are guarded - return the first analysis as representative
+    return pathAnalyses[0];
   }
 
-  // No effective guards found
+  // Not all paths are guarded - check if some paths have guards
+  const guardedPaths = pathAnalyses.filter((a) => a.isEffective);
+  if (guardedPaths.length > 0) {
+    return {
+      guardType: 'conditional-set',
+      isEffective: false,
+      explanation: `Only ${guardedPaths.length} of ${pathAnalyses.length} paths are guarded`,
+      riskLevel: 'risky',
+    };
+  }
+
+  // No effective guards found on any path
   return {
     guardType: 'none',
     isEffective: false,
@@ -199,17 +213,9 @@ function analyzePathGuard(conditions: PathCondition[]): GuardAnalysis {
   for (const condition of conditions) {
     const node = condition.conditionNode;
 
-    // Equality guard: if (x !== newValue) setX(newValue)
-    if (t.isBinaryExpression(node)) {
-      const analysis = analyzeEqualityGuard(node, condition.branchTaken);
-      if (analysis) return analysis;
-    }
-
-    // Toggle guard: if (!flag) setFlag(true)
-    if (t.isUnaryExpression(node) && node.operator === '!') {
-      const analysis = analyzeToggleGuard(node, condition.branchTaken);
-      if (analysis) return analysis;
-    }
+    // Check for guard patterns, including within logical expressions
+    const analysis = findGuardInExpression(node, condition.branchTaken);
+    if (analysis) return analysis;
   }
 
   return {
@@ -218,6 +224,52 @@ function analyzePathGuard(conditions: PathCondition[]): GuardAnalysis {
     explanation: 'Could not identify guard pattern',
     riskLevel: 'unsafe',
   };
+}
+
+/**
+ * Recursively search for guard patterns within an expression.
+ * Handles logical expressions (&&, ||) to find guards in complex conditions
+ * like `if (someCondition && value !== prevValue)`.
+ */
+function findGuardInExpression(node: t.Node, branchTaken: 'true' | 'false'): GuardAnalysis | null {
+  // Equality guard: if (x !== newValue) setX(newValue)
+  if (t.isBinaryExpression(node)) {
+    const analysis = analyzeEqualityGuard(node, branchTaken);
+    if (analysis) return analysis;
+  }
+
+  // Toggle guard: if (!flag) setFlag(true)
+  if (t.isUnaryExpression(node) && node.operator === '!') {
+    const analysis = analyzeToggleGuard(node, branchTaken);
+    if (analysis) return analysis;
+  }
+
+  // Recursively check logical expressions
+  // For `a && b` with branchTaken='true': both a and b must be true,
+  //   so if either contains a guard, it's effective
+  // For `a || b` with branchTaken='true': at least one is true,
+  //   so we can't rely on either being a guard (either could be skipped)
+  // For `a && b` with branchTaken='false': at least one is false,
+  //   so we can't rely on a specific guard
+  // For `a || b` with branchTaken='false': both must be false,
+  //   so both are evaluated
+  if (t.isLogicalExpression(node)) {
+    if (node.operator === '&&' && branchTaken === 'true') {
+      // Both sides must be true - check both for guards
+      const leftAnalysis = findGuardInExpression(node.left, 'true');
+      if (leftAnalysis) return leftAnalysis;
+      const rightAnalysis = findGuardInExpression(node.right, 'true');
+      if (rightAnalysis) return rightAnalysis;
+    } else if (node.operator === '||' && branchTaken === 'false') {
+      // Both sides must be false - check both for guards
+      const leftAnalysis = findGuardInExpression(node.left, 'false');
+      if (leftAnalysis) return leftAnalysis;
+      const rightAnalysis = findGuardInExpression(node.right, 'false');
+      if (rightAnalysis) return rightAnalysis;
+    }
+  }
+
+  return null;
 }
 
 /**
