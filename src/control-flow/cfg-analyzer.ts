@@ -1,0 +1,449 @@
+/**
+ * CFG Analyzer - Analyzes Control Flow Graphs for reachability and path conditions.
+ *
+ * This module provides algorithms to:
+ * - Find all paths from entry to a specific node
+ * - Extract conditions that must be true for each path
+ * - Determine if a node is guaranteed to execute
+ * - Analyze guard effectiveness for preventing infinite loops
+ */
+
+import * as t from '@babel/types';
+import type { CFG, CFGNode, ReachabilityResult, PathCondition, GuardAnalysis } from './cfg-types';
+
+/**
+ * Maximum number of paths to enumerate before giving up.
+ * This prevents exponential blowup in highly branched code.
+ */
+const MAX_PATHS = 100;
+
+/**
+ * Maximum path length to prevent infinite loops in cyclic graphs.
+ */
+const MAX_PATH_LENGTH = 50;
+
+/**
+ * Analyze reachability and path conditions for a specific CFG node.
+ */
+export function analyzeReachability(cfg: CFG, targetNode: CFGNode): ReachabilityResult {
+  // Quick check: if not reachable, return early
+  if (!targetNode.reachable) {
+    return {
+      reachable: false,
+      guaranteedToExecute: false,
+      paths: [],
+      pathConditions: [],
+      hasEffectiveGuard: false,
+    };
+  }
+
+  // Find all paths from entry to target
+  const paths = findAllPaths(cfg.entry, targetNode);
+
+  // Extract conditions for each path
+  const pathConditions = paths.map((path) => extractPathConditions(path));
+
+  // Check if guaranteed to execute (no conditional branches can skip it)
+  const guaranteedToExecute = isGuaranteedToExecute(cfg, targetNode);
+
+  // Analyze guard effectiveness
+  const guardAnalysis = analyzeGuards(pathConditions);
+
+  return {
+    reachable: true,
+    guaranteedToExecute,
+    paths,
+    pathConditions,
+    hasEffectiveGuard: guardAnalysis.isEffective,
+    guardAnalysis,
+  };
+}
+
+/**
+ * Find all paths from a source node to a target node.
+ * Uses DFS with path tracking and cycle detection.
+ */
+export function findAllPaths(source: CFGNode, target: CFGNode): CFGNode[][] {
+  const paths: CFGNode[][] = [];
+  const currentPath: CFGNode[] = [];
+  // Track nodes in the current path to detect cycles (not all visited nodes)
+  const currentPathSet = new Set<string>();
+
+  function dfs(node: CFGNode): void {
+    // Prevent infinite loops and excessive paths
+    if (paths.length >= MAX_PATHS) return;
+    if (currentPath.length >= MAX_PATH_LENGTH) return;
+
+    // Cycle detection - don't revisit nodes in current path
+    if (currentPathSet.has(node.id)) return;
+
+    currentPath.push(node);
+    currentPathSet.add(node.id);
+
+    if (node === target) {
+      paths.push([...currentPath]);
+    } else {
+      for (const successor of node.successors) {
+        dfs(successor);
+      }
+    }
+
+    currentPath.pop();
+    currentPathSet.delete(node.id);
+  }
+
+  dfs(source);
+  return paths;
+}
+
+/**
+ * Extract the conditions that must hold for a path to execute.
+ */
+export function extractPathConditions(path: CFGNode[]): PathCondition[] {
+  const conditions: PathCondition[] = [];
+
+  for (let i = 0; i < path.length - 1; i++) {
+    const node = path[i];
+    const next = path[i + 1];
+
+    // Only branch nodes and loop tests have conditions
+    if (node.type !== 'branch' && node.type !== 'loop-test') continue;
+    if (!node.astNode) continue;
+
+    // Determine which branch was taken
+    const isTrueBranch = node.trueSuccessor === next;
+    const isFalseBranch = node.falseSuccessor === next;
+
+    if (!isTrueBranch && !isFalseBranch) continue;
+
+    const condition: PathCondition = {
+      conditionNode: node.astNode,
+      branchTaken: isTrueBranch ? 'true' : 'false',
+      parentNode: node.astNode,
+      involvesStateVariable: false, // Will be filled in by caller
+    };
+
+    conditions.push(condition);
+  }
+
+  return conditions;
+}
+
+/**
+ * Check if a node is guaranteed to execute (dominates the exit).
+ *
+ * A node is guaranteed to execute if and only if it dominates the exit node.
+ * This means all paths from entry to exit must pass through this node.
+ *
+ * Uses dominator tree computation which is O(n²) worst case but much more
+ * efficient than path enumeration for graphs with many paths.
+ *
+ * @param cfg - The control flow graph
+ * @param target - The node to check
+ * @param dominators - Optional pre-computed dominators (for efficiency when checking multiple nodes)
+ */
+export function isGuaranteedToExecute(
+  cfg: CFG,
+  target: CFGNode,
+  dominators?: Map<string, Set<string>>
+): boolean {
+  // If target is entry, it's guaranteed
+  if (target === cfg.entry) return true;
+
+  // If target is the exit, it's guaranteed (all paths end at exit)
+  if (target === cfg.exit) return true;
+
+  // Compute dominators if not provided
+  const doms = dominators ?? computeDominators(cfg);
+
+  // A node is guaranteed to execute if it dominates the exit node
+  const exitDominators = doms.get(cfg.exit.id);
+  return exitDominators?.has(target.id) ?? false;
+}
+
+/**
+ * Analyze conditions to determine guard effectiveness.
+ */
+export function analyzeGuards(pathConditions: PathCondition[][]): GuardAnalysis {
+  // No conditions means guaranteed execution (already handled)
+  if (pathConditions.length === 0) {
+    return {
+      guardType: 'none',
+      isEffective: false,
+      explanation: 'No path conditions found',
+      riskLevel: 'unsafe',
+    };
+  }
+
+  // Analyze all paths
+  const pathAnalyses = pathConditions.map(analyzePathGuard);
+
+  // The guard is only effective if EVERY path to the node is guarded
+  const allPathsAreGuarded = pathAnalyses.every((analysis) => analysis.isEffective);
+
+  if (allPathsAreGuarded && pathAnalyses.length > 0) {
+    // All paths are guarded - return the first analysis as representative
+    return pathAnalyses[0];
+  }
+
+  // Not all paths are guarded - check if some paths have guards
+  const guardedPaths = pathAnalyses.filter((a) => a.isEffective);
+  if (guardedPaths.length > 0) {
+    return {
+      guardType: 'conditional-set',
+      isEffective: false,
+      explanation: `Only ${guardedPaths.length} of ${pathAnalyses.length} paths are guarded`,
+      riskLevel: 'risky',
+    };
+  }
+
+  // No effective guards found on any path
+  return {
+    guardType: 'none',
+    isEffective: false,
+    explanation: 'No effective guard conditions found on any path',
+    riskLevel: 'unsafe',
+  };
+}
+
+/**
+ * Analyze conditions on a single path for guard patterns.
+ */
+function analyzePathGuard(conditions: PathCondition[]): GuardAnalysis {
+  for (const condition of conditions) {
+    const node = condition.conditionNode;
+
+    // Check for guard patterns, including within logical expressions
+    const analysis = findGuardInExpression(node, condition.branchTaken);
+    if (analysis) return analysis;
+  }
+
+  return {
+    guardType: 'none',
+    isEffective: false,
+    explanation: 'Could not identify guard pattern',
+    riskLevel: 'unsafe',
+  };
+}
+
+/**
+ * Recursively search for guard patterns within an expression.
+ * Handles logical expressions (&&, ||) to find guards in complex conditions
+ * like `if (someCondition && value !== prevValue)`.
+ */
+function findGuardInExpression(node: t.Node, branchTaken: 'true' | 'false'): GuardAnalysis | null {
+  // Equality guard: if (x !== newValue) setX(newValue)
+  if (t.isBinaryExpression(node)) {
+    const analysis = analyzeEqualityGuard(node, branchTaken);
+    if (analysis) return analysis;
+  }
+
+  // Toggle guard: if (!flag) setFlag(true)
+  if (t.isUnaryExpression(node) && node.operator === '!') {
+    const analysis = analyzeToggleGuard(node, branchTaken);
+    if (analysis) return analysis;
+  }
+
+  // Recursively check logical expressions
+  // For `a && b` with branchTaken='true': both a and b must be true,
+  //   so if either contains a guard, it's effective
+  // For `a || b` with branchTaken='true': at least one is true,
+  //   so we can't rely on either being a guard (either could be skipped)
+  // For `a && b` with branchTaken='false': at least one is false,
+  //   so we can't rely on a specific guard
+  // For `a || b` with branchTaken='false': both must be false,
+  //   so both are evaluated
+  if (t.isLogicalExpression(node)) {
+    if (node.operator === '&&' && branchTaken === 'true') {
+      // Both sides must be true - check both for guards
+      const leftAnalysis = findGuardInExpression(node.left, 'true');
+      if (leftAnalysis) return leftAnalysis;
+      const rightAnalysis = findGuardInExpression(node.right, 'true');
+      if (rightAnalysis) return rightAnalysis;
+    } else if (node.operator === '||' && branchTaken === 'false') {
+      // Both sides must be false - check both for guards
+      const leftAnalysis = findGuardInExpression(node.left, 'false');
+      if (leftAnalysis) return leftAnalysis;
+      const rightAnalysis = findGuardInExpression(node.right, 'false');
+      if (rightAnalysis) return rightAnalysis;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Analyze equality guard pattern: if (x !== y) setX(y)
+ */
+function analyzeEqualityGuard(
+  node: t.BinaryExpression,
+  branchTaken: 'true' | 'false'
+): GuardAnalysis | null {
+  const { operator } = node;
+
+  // Pattern: x !== y (or x != y)
+  if (operator === '!==' || operator === '!=') {
+    if (branchTaken === 'true') {
+      // We're in the "not equal" branch - this is where setState should be
+      return {
+        guardType: 'equality-guard',
+        isEffective: true,
+        guardCondition: node,
+        explanation: 'Equality guard ensures setState only runs when value differs',
+        riskLevel: 'safe',
+      };
+    }
+  }
+
+  // Pattern: x === y (or x == y) with false branch
+  if (operator === '===' || operator === '==') {
+    if (branchTaken === 'false') {
+      // We're in the "not equal" branch
+      return {
+        guardType: 'equality-guard',
+        isEffective: true,
+        guardCondition: node,
+        explanation: 'Equality guard (inverted) ensures setState only runs when value differs',
+        riskLevel: 'safe',
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Analyze toggle guard pattern: if (!flag) setFlag(true)
+ */
+function analyzeToggleGuard(
+  node: t.UnaryExpression,
+  branchTaken: 'true' | 'false'
+): GuardAnalysis | null {
+  if (node.operator !== '!') return null;
+
+  // Pattern: if (!flag) - we're checking for falsy value
+  if (branchTaken === 'true') {
+    // We entered the "flag is falsy" branch
+    // If we setFlag(true), next render flag will be truthy and we won't enter
+    return {
+      guardType: 'toggle-guard',
+      isEffective: true,
+      guardCondition: node,
+      explanation: 'Toggle guard prevents re-execution after state is set',
+      riskLevel: 'safe',
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Check if a condition involves a specific variable.
+ *
+ * Uses Babel's VISITOR_KEYS for robust AST traversal, avoiding traversal
+ * of non-AST properties like 'loc', 'start', 'end', etc.
+ */
+export function conditionInvolvesVariable(condition: t.Node, variableName: string): boolean {
+  let found = false;
+
+  function visit(node: t.Node | null | undefined): void {
+    if (!node || found) return;
+
+    if (t.isIdentifier(node) && node.name === variableName) {
+      found = true;
+      return;
+    }
+
+    // Use VISITOR_KEYS for robust traversal of only AST child nodes
+    const keys = t.VISITOR_KEYS[node.type];
+    if (!keys) return;
+
+    for (const key of keys) {
+      const value = (node as unknown as Record<string, unknown>)[key];
+      if (value && typeof value === 'object') {
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item && typeof item === 'object' && 'type' in item) {
+              visit(item as t.Node);
+            }
+          }
+        } else if ('type' in value) {
+          visit(value as t.Node);
+        }
+      }
+    }
+  }
+
+  visit(condition);
+  return found;
+}
+
+/**
+ * Compute dominators for all nodes in the CFG.
+ * A node D dominates node N if every path from entry to N goes through D.
+ *
+ * Returns a Map where dominators.get(nodeId) is the set of node IDs that dominate it.
+ */
+export function computeDominators(cfg: CFG): Map<string, Set<string>> {
+  const dominators = new Map<string, Set<string>>();
+  const allNodeIds = new Set(cfg.nodes.keys());
+
+  // Initialize: entry dominates itself, others dominated by all
+  for (const [id] of cfg.nodes) {
+    if (id === cfg.entry.id) {
+      dominators.set(id, new Set([id]));
+    } else {
+      dominators.set(id, new Set(allNodeIds));
+    }
+  }
+
+  // Iterate until fixed point
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    for (const [id, node] of cfg.nodes) {
+      if (id === cfg.entry.id) continue;
+
+      // New dominators = intersection of predecessors' dominators + self
+      let newDoms: Set<string> | null = null;
+
+      for (const pred of node.predecessors) {
+        const predDoms = dominators.get(pred.id);
+        if (!predDoms) continue;
+
+        if (newDoms === null) {
+          newDoms = new Set(predDoms);
+        } else {
+          // Intersection
+          for (const d of newDoms) {
+            if (!predDoms.has(d)) {
+              newDoms.delete(d);
+            }
+          }
+        }
+      }
+
+      if (newDoms === null) {
+        newDoms = new Set();
+      }
+      newDoms.add(id);
+
+      const oldDoms = dominators.get(id)!;
+      if (newDoms.size !== oldDoms.size) {
+        changed = true;
+        dominators.set(id, newDoms);
+      } else {
+        for (const d of newDoms) {
+          if (!oldDoms.has(d)) {
+            changed = true;
+            dominators.set(id, newDoms);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return dominators;
+}
