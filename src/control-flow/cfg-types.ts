@@ -204,7 +204,7 @@ export interface GuardAnalysis {
  * This is an implicit structure - edges are represented by
  * predecessors/successors arrays in CFGNode.
  */
-export interface CFGEdge {
+interface CFGEdge {
   /** Source node */
   from: CFGNode;
 

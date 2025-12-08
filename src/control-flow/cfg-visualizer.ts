@@ -235,17 +235,14 @@ function getEdgeAttributes(from: CFGNode, to: CFGNode): string {
  * Escape special characters for DOT labels.
  */
 function escapeLabel(label: string): string {
-  return label
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n');
+  return label.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
 }
 
 /**
  * Generate a simple ASCII representation of the CFG for terminal output.
  * Less detailed than DOT but useful for quick debugging.
  */
-export function cfgToAscii(cfg: CFG): string {
+function cfgToAscii(cfg: CFG): string {
   const lines: string[] = [];
   const visited = new Set<string>();
 

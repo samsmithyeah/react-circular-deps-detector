@@ -97,11 +97,7 @@ class CFGBuilder {
   /**
    * Create a new CFG node.
    */
-  private createNode(
-    type: CFGNodeType,
-    astNode: t.Node | null,
-    label: string
-  ): CFGNode {
+  private createNode(type: CFGNodeType, astNode: t.Node | null, label: string): CFGNode {
     const id = `node_${this.nodeIdCounter++}`;
     const node: CFGNode = {
       id,
@@ -113,11 +109,7 @@ class CFGBuilder {
       reachable: false,
     };
 
-    if (
-      astNode &&
-      this.options.trackSourceLocations &&
-      astNode.loc?.start
-    ) {
+    if (astNode && this.options.trackSourceLocations && astNode.loc?.start) {
       node.loc = {
         line: astNode.loc.start.line,
         column: astNode.loc.start.column,
@@ -182,11 +174,7 @@ class CFGBuilder {
    * Process a block statement (list of statements).
    * Returns the last node after processing all statements.
    */
-  private processBlock(
-    block: t.BlockStatement,
-    current: CFGNode,
-    exitNode: CFGNode
-  ): CFGNode {
+  private processBlock(block: t.BlockStatement, current: CFGNode, exitNode: CFGNode): CFGNode {
     for (const stmt of block.body) {
       current = this.processStatement(stmt, current, exitNode);
 
@@ -214,11 +202,7 @@ class CFGBuilder {
   /**
    * Process a single statement.
    */
-  private processStatement(
-    stmt: t.Statement,
-    current: CFGNode,
-    exitNode: CFGNode
-  ): CFGNode {
+  private processStatement(stmt: t.Statement, current: CFGNode, exitNode: CFGNode): CFGNode {
     // Handle labeled statements
     if (t.isLabeledStatement(stmt)) {
       return this.processLabeledStatement(stmt, current, exitNode);
@@ -287,21 +271,13 @@ class CFGBuilder {
     if (t.isFunctionDeclaration(stmt)) {
       // Function declarations are hoisted; they don't affect control flow
       // But we still create a node for them for completeness
-      const node = this.createNode(
-        'statement',
-        stmt,
-        `function ${stmt.id?.name || 'anonymous'}`
-      );
+      const node = this.createNode('statement', stmt, `function ${stmt.id?.name || 'anonymous'}`);
       this.connect(current, node);
       return node;
     }
 
     // Default: treat as a simple statement
-    const node = this.createNode(
-      'statement',
-      stmt,
-      this.getStatementLabel(stmt)
-    );
+    const node = this.createNode('statement', stmt, this.getStatementLabel(stmt));
     this.connect(current, node);
     return node;
   }
@@ -309,11 +285,7 @@ class CFGBuilder {
   /**
    * Process an if statement.
    */
-  private processIfStatement(
-    stmt: t.IfStatement,
-    current: CFGNode,
-    exitNode: CFGNode
-  ): CFGNode {
+  private processIfStatement(stmt: t.IfStatement, current: CFGNode, exitNode: CFGNode): CFGNode {
     // Create branch node for the condition
     const branchNode = this.createNode(
       'branch',
@@ -484,11 +456,7 @@ class CFGBuilder {
   /**
    * Process a for statement.
    */
-  private processForStatement(
-    stmt: t.ForStatement,
-    current: CFGNode,
-    exitNode: CFGNode
-  ): CFGNode {
+  private processForStatement(stmt: t.ForStatement, current: CFGNode, exitNode: CFGNode): CFGNode {
     // Process init
     if (stmt.init) {
       if (t.isVariableDeclaration(stmt.init)) {
@@ -500,11 +468,7 @@ class CFGBuilder {
 
     // Create test node (or synthetic always-true if no test)
     const testNode = stmt.test
-      ? this.createNode(
-          'loop-test',
-          stmt.test,
-          `for-test (${this.getExpressionLabel(stmt.test)})`
-        )
+      ? this.createNode('loop-test', stmt.test, `for-test (${this.getExpressionLabel(stmt.test)})`)
       : this.createNode('loop-test', null, 'for-test (true)');
     this.connect(current, testNode);
 
@@ -592,11 +556,7 @@ class CFGBuilder {
     // Process left (variable declaration or assignment)
     let bodyStart: CFGNode;
     if (t.isVariableDeclaration(stmt.left)) {
-      bodyStart = this.createNode(
-        'statement',
-        stmt.left,
-        this.getStatementLabel(stmt.left)
-      );
+      bodyStart = this.createNode('statement', stmt.left, this.getStatementLabel(stmt.left));
     } else {
       bodyStart = this.createNode(
         'statement',
@@ -706,11 +666,7 @@ class CFGBuilder {
   /**
    * Process a try statement.
    */
-  private processTryStatement(
-    stmt: t.TryStatement,
-    current: CFGNode,
-    exitNode: CFGNode
-  ): CFGNode {
+  private processTryStatement(stmt: t.TryStatement, current: CFGNode, exitNode: CFGNode): CFGNode {
     // Create try entry node
     const tryNode = this.createNode('try', stmt, 'try');
     this.connect(current, tryNode);
@@ -726,11 +682,7 @@ class CFGBuilder {
           ? stmt.handler.param.name
           : 'error'
         : '';
-      catchNode = this.createNode(
-        'catch',
-        stmt.handler,
-        `catch (${paramName})`
-      );
+      catchNode = this.createNode('catch', stmt.handler, `catch (${paramName})`);
     }
 
     // Create finally node if present
@@ -807,16 +759,13 @@ class CFGBuilder {
     current: CFGNode,
     exitNode: CFGNode
   ): CFGNode {
-    const label = stmt.argument
-      ? `return ${this.getExpressionLabel(stmt.argument)}`
-      : 'return';
+    const label = stmt.argument ? `return ${this.getExpressionLabel(stmt.argument)}` : 'return';
     const returnNode = this.createNode('return', stmt, label);
     this.connect(current, returnNode);
 
     // If there are finally blocks, connect to them
     if (this.context.finallyStack.length > 0) {
-      const finallyNode =
-        this.context.finallyStack[this.context.finallyStack.length - 1];
+      const finallyNode = this.context.finallyStack[this.context.finallyStack.length - 1];
       this.connect(returnNode, finallyNode);
     } else {
       // Connect directly to exit
@@ -863,16 +812,9 @@ class CFGBuilder {
   /**
    * Process a break statement.
    */
-  private processBreakStatement(
-    stmt: t.BreakStatement,
-    current: CFGNode
-  ): CFGNode {
+  private processBreakStatement(stmt: t.BreakStatement, current: CFGNode): CFGNode {
     const label = stmt.label ? stmt.label.name : undefined;
-    const breakNode = this.createNode(
-      'break',
-      stmt,
-      label ? `break ${label}` : 'break'
-    );
+    const breakNode = this.createNode('break', stmt, label ? `break ${label}` : 'break');
     breakNode.targetLabel = label;
     this.connect(current, breakNode);
 
@@ -885,8 +827,7 @@ class CFGBuilder {
     } else {
       // Break from nearest loop or switch
       const loopCtx = this.context.loopStack[this.context.loopStack.length - 1];
-      const switchCtx =
-        this.context.switchStack[this.context.switchStack.length - 1];
+      const switchCtx = this.context.switchStack[this.context.switchStack.length - 1];
 
       // Use whichever is more recent (on top of their respective stacks)
       if (loopCtx && (!switchCtx || loopCtx.exitNode)) {
@@ -902,10 +843,7 @@ class CFGBuilder {
   /**
    * Process a continue statement.
    */
-  private processContinueStatement(
-    stmt: t.ContinueStatement,
-    current: CFGNode
-  ): CFGNode {
+  private processContinueStatement(stmt: t.ContinueStatement, current: CFGNode): CFGNode {
     const label = stmt.label ? stmt.label.name : undefined;
     const continueNode = this.createNode(
       'continue',
@@ -952,10 +890,7 @@ class CFGBuilder {
   /**
    * Process an expression statement.
    */
-  private processExpressionStatement(
-    stmt: t.ExpressionStatement,
-    current: CFGNode
-  ): CFGNode {
+  private processExpressionStatement(stmt: t.ExpressionStatement, current: CFGNode): CFGNode {
     return this.processExpression(stmt.expression, current);
   }
 
@@ -977,11 +912,7 @@ class CFGBuilder {
     }
 
     // Regular expression - create single node
-    const node = this.createNode(
-      'statement',
-      expr,
-      this.getExpressionLabel(expr)
-    );
+    const node = this.createNode('statement', expr, this.getExpressionLabel(expr));
     this.connect(current, node);
     return node;
   }
@@ -990,27 +921,16 @@ class CFGBuilder {
    * Process logical expressions (&&, ||, ??).
    * These create implicit branches because of short-circuit evaluation.
    */
-  private processLogicalExpression(
-    expr: t.LogicalExpression,
-    current: CFGNode
-  ): CFGNode {
+  private processLogicalExpression(expr: t.LogicalExpression, current: CFGNode): CFGNode {
     // Process left side
-    const leftNode = this.createNode(
-      'branch',
-      expr.left,
-      this.getExpressionLabel(expr.left)
-    );
+    const leftNode = this.createNode('branch', expr.left, this.getExpressionLabel(expr.left));
     this.connect(current, leftNode);
 
     // Create merge node
     const mergeNode = this.createNode('merge', null, 'logical-merge');
 
     // Process right side
-    const rightNode = this.createNode(
-      'statement',
-      expr.right,
-      this.getExpressionLabel(expr.right)
-    );
+    const rightNode = this.createNode('statement', expr.right, this.getExpressionLabel(expr.right));
 
     if (expr.operator === '&&') {
       // && : if left is truthy, evaluate right; otherwise short-circuit
@@ -1040,10 +960,7 @@ class CFGBuilder {
   /**
    * Process conditional (ternary) expressions.
    */
-  private processConditionalExpression(
-    expr: t.ConditionalExpression,
-    current: CFGNode
-  ): CFGNode {
+  private processConditionalExpression(expr: t.ConditionalExpression, current: CFGNode): CFGNode {
     // Create branch node for condition
     const branchNode = this.createNode(
       'branch',
@@ -1086,21 +1003,13 @@ class CFGBuilder {
     current: CFGNode
   ): CFGNode {
     // Optional chaining creates an implicit branch
-    const checkNode = this.createNode(
-      'branch',
-      expr,
-      `${this.getExpressionLabel(expr)}?`
-    );
+    const checkNode = this.createNode('branch', expr, `${this.getExpressionLabel(expr)}?`);
     this.connect(current, checkNode);
 
     const mergeNode = this.createNode('merge', null, 'optional-merge');
 
     // If not nullish, continue chain
-    const continueNode = this.createNode(
-      'statement',
-      expr,
-      this.getExpressionLabel(expr)
-    );
+    const continueNode = this.createNode('statement', expr, this.getExpressionLabel(expr));
     checkNode.trueSuccessor = continueNode;
     this.connect(checkNode, continueNode);
     this.connect(continueNode, mergeNode);
@@ -1115,19 +1024,12 @@ class CFGBuilder {
   /**
    * Process a variable declaration.
    */
-  private processVariableDeclaration(
-    stmt: t.VariableDeclaration,
-    current: CFGNode
-  ): CFGNode {
+  private processVariableDeclaration(stmt: t.VariableDeclaration, current: CFGNode): CFGNode {
     // Create a node for the entire declaration
     const names = stmt.declarations
       .map((d) => (t.isIdentifier(d.id) ? d.id.name : '...'))
       .join(', ');
-    const node = this.createNode(
-      'statement',
-      stmt,
-      `${stmt.kind} ${names}`
-    );
+    const node = this.createNode('statement', stmt, `${stmt.kind} ${names}`);
     this.connect(current, node);
     return node;
   }
@@ -1146,9 +1048,7 @@ class CFGBuilder {
       return `${stmt.kind} ${names}`;
     }
     if (t.isReturnStatement(stmt)) {
-      return stmt.argument
-        ? `return ${this.getExpressionLabel(stmt.argument)}`
-        : 'return';
+      return stmt.argument ? `return ${this.getExpressionLabel(stmt.argument)}` : 'return';
     }
     return stmt.type;
   }

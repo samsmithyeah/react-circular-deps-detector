@@ -54,9 +54,4 @@ export {
 } from './setState-analyzer';
 
 // Visualizer
-export {
-  cfgToDot,
-  cfgToAscii,
-  cfgStats,
-  type DotOptions,
-} from './cfg-visualizer';
+export { cfgToDot, cfgToAscii, cfgStats, type DotOptions } from './cfg-visualizer';

@@ -32,10 +32,7 @@ const MAX_PATH_LENGTH = 50;
 /**
  * Analyze reachability and path conditions for a specific CFG node.
  */
-export function analyzeReachability(
-  cfg: CFG,
-  targetNode: CFGNode
-): ReachabilityResult {
+export function analyzeReachability(cfg: CFG, targetNode: CFGNode): ReachabilityResult {
   // Quick check: if not reachable, return early
   if (!targetNode.reachable) {
     return {
@@ -72,7 +69,7 @@ export function analyzeReachability(
 /**
  * Analyze whether a setState call will cause an infinite loop.
  */
-export function analyzeSetStateCall(
+function analyzeSetStateCall(
   cfg: CFG,
   setStateNode: t.CallExpression,
   stateVariable: string,
@@ -176,10 +173,7 @@ export function analyzeSetStateCall(
  * Find all paths from a source node to a target node.
  * Uses DFS with path tracking and cycle detection.
  */
-export function findAllPaths(
-  source: CFGNode,
-  target: CFGNode
-): CFGNode[][] {
+export function findAllPaths(source: CFGNode, target: CFGNode): CFGNode[][] {
   const paths: CFGNode[][] = [];
   const currentPath: CFGNode[] = [];
   const visited = new Set<string>();
@@ -277,9 +271,7 @@ export function isGuaranteedToExecute(cfg: CFG, target: CFGNode): boolean {
 /**
  * Analyze conditions to determine guard effectiveness.
  */
-export function analyzeGuards(
-  pathConditions: PathCondition[][]
-): GuardAnalysis {
+export function analyzeGuards(pathConditions: PathCondition[][]): GuardAnalysis {
   // No conditions means guaranteed execution (already handled)
   if (pathConditions.length === 0) {
     return {
@@ -365,8 +357,7 @@ function analyzeEqualityGuard(
         guardType: 'equality-guard',
         isEffective: true,
         guardCondition: node,
-        explanation:
-          'Equality guard ensures setState only runs when value differs',
+        explanation: 'Equality guard ensures setState only runs when value differs',
         riskLevel: 'safe',
       };
     }
@@ -380,18 +371,14 @@ function analyzeEqualityGuard(
         guardType: 'equality-guard',
         isEffective: true,
         guardCondition: node,
-        explanation:
-          'Equality guard (inverted) ensures setState only runs when value differs',
+        explanation: 'Equality guard (inverted) ensures setState only runs when value differs',
         riskLevel: 'safe',
       };
     }
   }
 
   // Check for object property comparison (risky with spreads)
-  if (
-    t.isMemberExpression(left) ||
-    t.isMemberExpression(right)
-  ) {
+  if (t.isMemberExpression(left) || t.isMemberExpression(right)) {
     // This might be comparing a property like user.id !== 5
     // But if setState does { ...user, id: 5 }, it creates a new object
     return {
@@ -435,10 +422,7 @@ function analyzeToggleGuard(
 /**
  * Check if a condition involves a specific variable.
  */
-export function conditionInvolvesVariable(
-  condition: t.Node,
-  variableName: string
-): boolean {
+export function conditionInvolvesVariable(condition: t.Node, variableName: string): boolean {
   let found = false;
 
   function visit(node: t.Node | null | undefined): void {
@@ -473,7 +457,7 @@ export function conditionInvolvesVariable(
 /**
  * Enrich path conditions with state variable information.
  */
-export function enrichPathConditions(
+function enrichPathConditions(
   conditions: PathCondition[],
   stateVariables: string[]
 ): PathCondition[] {
@@ -563,7 +547,7 @@ export function computeDominators(cfg: CFG): Map<string, Set<string>> {
 /**
  * Check if node A dominates node B.
  */
-export function dominates(
+function dominates(
   cfg: CFG,
   a: CFGNode,
   b: CFGNode,

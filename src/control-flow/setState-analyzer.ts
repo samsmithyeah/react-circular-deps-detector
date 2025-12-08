@@ -135,11 +135,7 @@ export function analyzeSetStateCalls(
     // Analyze guard effectiveness
     let guardAnalysis: GuardAnalysis | undefined;
     if (!isUnconditional && reachability.pathConditions.length > 0) {
-      guardAnalysis = analyzeGuardForSetState(
-        reachability,
-        stateVar,
-        setterCall
-      );
+      guardAnalysis = analyzeGuardForSetState(reachability, stateVar, setterCall);
     }
 
     const hasEffectiveGuard = guardAnalysis?.isEffective ?? false;
@@ -196,10 +192,7 @@ export function hasUnconditionalSetStateCFG(
 /**
  * Find a setState call expression in an AST node.
  */
-function findSetterCall(
-  node: t.Node,
-  setterNames: Set<string>
-): t.CallExpression | null {
+function findSetterCall(node: t.Node, setterNames: Set<string>): t.CallExpression | null {
   if (t.isCallExpression(node)) {
     const callee = node.callee;
     if (t.isIdentifier(callee) && setterNames.has(callee.name)) {
@@ -546,7 +539,7 @@ function findSettersInCallbacks(
 /**
  * Export the CFG for debugging/visualization.
  */
-export function buildHookCFG(hookBody: t.Node): CFG | null {
+function buildHookCFG(hookBody: t.Node): CFG | null {
   let bodyToAnalyze: t.BlockStatement | t.Expression | null = null;
   if (t.isArrowFunctionExpression(hookBody)) {
     bodyToAnalyze = hookBody.body as t.BlockStatement | t.Expression;

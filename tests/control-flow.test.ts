@@ -627,7 +627,9 @@ describe('Control Flow Graph', () => {
     /**
      * Helper to get the function body from parsed code.
      */
-    function getFunctionBody(code: string): t.ArrowFunctionExpression | t.FunctionExpression | null {
+    function getFunctionBody(
+      code: string
+    ): t.ArrowFunctionExpression | t.FunctionExpression | null {
       const ast = parser.parse(code, {
         sourceType: 'module',
         plugins: ['jsx', 'typescript'],

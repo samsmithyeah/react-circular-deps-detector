@@ -2831,7 +2831,6 @@ function containsNode(tree: t.Node | null | undefined, target: t.Node): boolean 
   return false;
 }
 
-
 /**
  * Check if a hook at the given line should be ignored based on comments.
  * Supports:
