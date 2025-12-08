@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "client/src/extension.ts",
+    "server/src/server.ts",
+    "src/test/runTest.ts",
+    "src/test/suite/index.ts",
+    "src/test/suite/**/*.test.ts",
+    "server/src/**/*.test.ts"
+  ],
+  "project": ["client/src/**/*.ts", "server/src/**/*.ts", "src/test/**/*.ts"],
+  "ignore": ["dist/**", "test-fixtures/**"],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": ["react-loop-detector", "@types/glob"]
+}

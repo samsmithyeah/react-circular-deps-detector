@@ -9,7 +9,6 @@ const tsRules = {
     { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
   ],
   '@typescript-eslint/no-explicit-any': 'warn',
-  '@typescript-eslint/no-require-imports': 'off',
 };
 
 export default tseslint.config(
@@ -17,21 +16,10 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
-    ignores: [
-      'dist/',
-      'node_modules/',
-      'coverage/',
-      'tests/fixtures/',
-      'test-files/',
-      'test-indirect-update.tsx',
-      'test-indirect-utils.ts',
-      'debug-test.js',
-      'eslint-plugin/',
-      'vscode-extension/',
-    ],
+    ignores: ['dist/', 'node_modules/', 'test-fixtures/', '.vscode-test/'],
   },
   {
-    files: ['**/*.js'],
+    files: ['*.js', '*.mjs'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -39,7 +27,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['src/**/*.ts'],
+    files: ['client/src/**/*.ts', 'server/src/**/*.ts', 'src/test/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -47,17 +35,5 @@ export default tseslint.config(
       },
     },
     rules: tsRules,
-  },
-  {
-    files: ['tests/**/*.ts'],
-    languageOptions: {
-      globals: {
-        ...globals.jest,
-      },
-    },
-    rules: {
-      ...tsRules,
-      'no-control-regex': 'off',
-    },
   }
 );
