@@ -77,7 +77,7 @@ function Component() {
 // Good - setState in event handler
 function Component() {
   const [count, setCount] = useState(0);
-  return <button onClick={() => setCount(c => c + 1)}>{count}</button>;
+  return <button onClick={() => setCount((c) => c + 1)}>{count}</button>;
 }
 ```
 
@@ -98,7 +98,7 @@ function Component() {
 function Component() {
   const [count, setCount] = useState(0);
   useEffect(() => {
-    setCount(c => c + 1); // OK: functional update doesn't read count
+    setCount((c) => c + 1); // OK: functional update doesn't read count
   }, []);
 }
 
@@ -241,6 +241,7 @@ function Component() {
 ### `recommended`
 
 Enables all rules with sensible defaults:
+
 - `no-render-phase-setstate`: error
 - `no-effect-loop`: error
 - `no-unstable-deps`: warn

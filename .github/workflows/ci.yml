@@ -41,3 +41,28 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      # ESLint Plugin
+      - name: Install eslint-plugin dependencies
+        run: npm ci
+        working-directory: eslint-plugin
+
+      - name: Check eslint-plugin formatting
+        run: npm run format:check
+        working-directory: eslint-plugin
+
+      - name: Lint eslint-plugin
+        run: npm run lint
+        working-directory: eslint-plugin
+
+      - name: Check eslint-plugin for unused dependencies
+        run: npm run knip
+        working-directory: eslint-plugin
+
+      - name: Build eslint-plugin
+        run: npm run build
+        working-directory: eslint-plugin
+
+      - name: Run eslint-plugin tests
+        run: npm test
+        working-directory: eslint-plugin

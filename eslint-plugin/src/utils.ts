@@ -23,12 +23,12 @@ export const EFFECT_HOOKS = new Set([
 /**
  * React hooks that return stable references
  */
-export const STABLE_HOOKS = new Set(['useRef', 'useId']);
+const STABLE_HOOKS = new Set(['useRef', 'useId']);
 
 /**
  * Built-in functions that return primitive values
  */
-export const STABLE_FUNCTION_CALLS = new Set([
+const STABLE_FUNCTION_CALLS = new Set([
   'require',
   'String',
   'Number',
@@ -40,7 +40,7 @@ export const STABLE_FUNCTION_CALLS = new Set([
 /**
  * Method calls that return primitive values
  */
-export const PRIMITIVE_RETURNING_METHODS = new Set([
+const PRIMITIVE_RETURNING_METHODS = new Set([
   // String methods
   'join',
   'toString',
@@ -84,7 +84,7 @@ export const PRIMITIVE_RETURNING_METHODS = new Set([
 /**
  * Static methods on built-in objects that return primitives
  */
-export const PRIMITIVE_RETURNING_STATIC_METHODS: Record<string, Set<string>> = {
+const PRIMITIVE_RETURNING_STATIC_METHODS: Record<string, Set<string>> = {
   Math: new Set([
     'abs',
     'acos',
@@ -147,7 +147,7 @@ export function isSetterName(name: string): boolean {
 /**
  * Check if a name looks like a custom hook (useXxx)
  */
-export function isHookName(name: string): boolean {
+function isHookName(name: string): boolean {
   return name.startsWith('use') && name.length > 3;
 }
 
@@ -157,32 +157,6 @@ export function isHookName(name: string): boolean {
  */
 export function getStateNameFromSetter(setterName: string): string {
   return setterName.charAt(3).toLowerCase() + setterName.slice(4);
-}
-
-/**
- * Check if a call expression is a hook call
- */
-export function isHookCall(node: TSESTree.CallExpression): boolean {
-  if (node.callee.type === 'Identifier') {
-    return isHookName(node.callee.name);
-  }
-  if (node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier') {
-    return isHookName(node.callee.property.name);
-  }
-  return false;
-}
-
-/**
- * Get the hook name from a call expression
- */
-export function getHookName(node: TSESTree.CallExpression): string | null {
-  if (node.callee.type === 'Identifier') {
-    return node.callee.name;
-  }
-  if (node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier') {
-    return node.callee.property.name;
-  }
-  return null;
 }
 
 /**
@@ -233,99 +207,9 @@ export function isStableFunctionCall(node: TSESTree.CallExpression): boolean {
 }
 
 /**
- * Check if a node is inside a callback (arrow function or function expression)
- */
-export function isInsideCallback(node: TSESTree.Node, ancestors: TSESTree.Node[]): boolean {
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const ancestor = ancestors[i];
-
-    if (ancestor.type === 'ArrowFunctionExpression' || ancestor.type === 'FunctionExpression') {
-      // Check if this is NOT the component function itself
-      const parent = ancestors[i - 1];
-      if (parent?.type === 'VariableDeclarator') {
-        const id = parent.id;
-        if (id.type === 'Identifier' && isComponentName(id.name)) {
-          // This is the component function, not a callback
-          return false;
-        }
-      }
-      return true;
-    }
-
-    if (ancestor.type === 'FunctionDeclaration') {
-      // Check if this is the component function
-      if (ancestor.id && isComponentName(ancestor.id.name)) {
-        return false;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Find ancestors of a node (ESLint provides this via context.getAncestors())
- */
-export function findAncestors(
-  node: TSESTree.Node,
-  sourceCode: { getAncestors: (node: TSESTree.Node) => TSESTree.Node[] }
-): TSESTree.Node[] {
-  return sourceCode.getAncestors(node);
-}
-
-/**
- * Check if a node is inside an effect hook callback
- */
-export function isInsideEffectCallback(ancestors: TSESTree.Node[]): boolean {
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const ancestor = ancestors[i];
-
-    if (
-      ancestor.type === 'CallExpression' &&
-      ancestor.callee.type === 'Identifier' &&
-      EFFECT_HOOKS.has(ancestor.callee.name)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Extract useState/useReducer state info from a component
- */
-export interface StateInfo {
-  /** State variable name -> setter name */
-  stateVars: Map<string, string>;
-  /** Setter name -> state variable name */
-  setterVars: Map<string, string>;
-}
-
-/**
- * Check if a node is an object literal
- */
-export function isObjectLiteral(node: TSESTree.Node): boolean {
-  return node.type === 'ObjectExpression';
-}
-
-/**
- * Check if a node is an array literal
- */
-export function isArrayLiteral(node: TSESTree.Node): boolean {
-  return node.type === 'ArrayExpression';
-}
-
-/**
- * Check if a node is a function expression (arrow or regular)
- */
-export function isFunctionExpression(node: TSESTree.Node): boolean {
-  return node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression';
-}
-
-/**
  * Check if a value is an AST node
  */
-export function isAstNode(value: unknown): value is TSESTree.Node {
+function isAstNode(value: unknown): value is TSESTree.Node {
   return (
     value !== null &&
     typeof value === 'object' &&
@@ -337,7 +221,7 @@ export function isAstNode(value: unknown): value is TSESTree.Node {
 /**
  * Result from finding setter calls - includes the node, setter name, and associated state
  */
-export interface SetterCallInfo {
+interface SetterCallInfo {
   node: TSESTree.CallExpression;
   setter: string;
   state: string | null;
