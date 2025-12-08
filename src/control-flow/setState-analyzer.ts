@@ -72,8 +72,11 @@ export function analyzeSetStateCalls(
   let cfg: CFG;
   try {
     cfg = buildCFG(bodyToAnalyze);
-  } catch {
-    // If CFG building fails, return empty results
+  } catch (error) {
+    // If CFG building fails, log in debug mode and return empty results
+    if (process.env.DEBUG) {
+      console.warn('[CFG] Failed to build CFG for hook body:', error);
+    }
     return results;
   }
 
@@ -318,8 +321,17 @@ const DEFERRED_FUNCTIONS = new Set(['setTimeout', 'setInterval', 'requestAnimati
 /** Promise method names */
 const PROMISE_METHODS = new Set(['then', 'catch', 'finally']);
 
+interface CallbackTraversalState {
+  type: 'promise' | 'deferred' | null;
+  deferredType?: string;
+  conditionalDepth: number;
+}
+
 /**
  * Find setState calls inside callbacks (promise and deferred).
+ *
+ * Uses t.VISITOR_KEYS for robust AST traversal, ensuring all child nodes
+ * are visited without manually enumerating every possible AST node type.
  *
  * This function traverses the AST looking for setState calls inside:
  * 1. Promise callbacks (.then/.catch/.finally) - will execute when promise settles
@@ -333,14 +345,47 @@ function findSettersInCallbacks(
 ): Map<string, CallbackContext> {
   const foundSetters = new Map<string, CallbackContext>();
 
-  interface VisitorContext {
-    type: 'promise' | 'deferred' | null;
-    deferredType?: string;
-    conditionalDepth: number;
+  // Track callback context per node using a WeakMap
+  const nodeContext = new WeakMap<t.Node, CallbackTraversalState>();
+
+  // Helper to get context by walking up ancestor chain
+  function getContextFromAncestors(node: t.Node, ancestors: t.Node[]): CallbackTraversalState {
+    // Check current node first
+    const ctx = nodeContext.get(node);
+    if (ctx) return ctx;
+
+    // Walk up ancestors (in reverse order since ancestors is root->leaf)
+    for (let i = ancestors.length - 1; i >= 0; i--) {
+      const ancestorCtx = nodeContext.get(ancestors[i]);
+      if (ancestorCtx) return ancestorCtx;
+    }
+    return { type: null, conditionalDepth: 0 };
   }
 
-  function visitNode(node: t.Node | null | undefined, ctx: VisitorContext): void {
-    if (!node) return;
+  // Helper to set context for callback bodies
+  function setCallbackContext(
+    node: t.Node,
+    type: 'promise' | 'deferred',
+    deferredType?: string
+  ): void {
+    nodeContext.set(node, { type, deferredType, conditionalDepth: 0 });
+  }
+
+  // Helper to mark a node as conditional within its callback context
+  function markConditional(node: t.Node, parentCtx: CallbackTraversalState): void {
+    if (parentCtx.type) {
+      nodeContext.set(node, {
+        ...parentCtx,
+        conditionalDepth: parentCtx.conditionalDepth + 1,
+      });
+    }
+  }
+
+  // Use t.traverseFast which doesn't require a Program scope
+  // We need to use simple traversal instead of @babel/traverse
+  function visit(node: t.Node, ancestors: t.Node[]): void {
+    const ctx = getContextFromAncestors(node, ancestors);
+    const newAncestors = [...ancestors, node];
 
     if (t.isCallExpression(node)) {
       const callee = node.callee;
@@ -356,17 +401,11 @@ function findSettersInCallbacks(
 
       // Check if this is a deferred function call (setTimeout, setInterval, etc.)
       if (t.isIdentifier(callee) && DEFERRED_FUNCTIONS.has(callee.name)) {
-        // Visit the callback argument with deferred context
         for (const arg of node.arguments) {
           if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-            visitNode(arg.body, {
-              type: 'deferred',
-              deferredType: callee.name,
-              conditionalDepth: 0,
-            });
+            setCallbackContext(arg.body, 'deferred', callee.name);
           }
         }
-        return;
       }
 
       // Check if this is a promise method call (.then/.catch/.finally)
@@ -375,122 +414,65 @@ function findSettersInCallbacks(
         t.isIdentifier(callee.property) &&
         PROMISE_METHODS.has(callee.property.name)
       ) {
-        // Visit the object (the promise chain before this method)
-        visitNode(callee.object, ctx);
-
-        // Visit the callback arguments with promise context
         for (const arg of node.arguments) {
           if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-            visitNode(arg.body, {
-              type: 'promise',
-              conditionalDepth: 0,
-            });
-          } else {
-            visitNode(arg, ctx);
+            setCallbackContext(arg.body, 'promise');
           }
         }
-        return;
       }
 
-      // Regular call - visit callee and arguments
-      visitNode(callee, ctx);
+      // Continue traversal into callee and arguments
+      visit(callee, newAncestors);
       for (const arg of node.arguments) {
-        visitNode(arg, ctx);
+        visit(arg as t.Node, newAncestors);
       }
       return;
     }
 
-    // Conditional contexts - increase depth when inside a callback
+    // Skip nested function declarations (they're not executed immediately)
+    if (t.isFunctionDeclaration(node)) {
+      return;
+    }
+
+    // Skip nested arrow/function expressions unless they're callback bodies we've marked
+    if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) {
+      if (nodeContext.has(node.body)) {
+        // This is a callback body we want to traverse
+        visit(node.body, newAncestors);
+      }
+      return;
+    }
+
+    // Mark conditional branches
     if (t.isIfStatement(node)) {
-      visitNode(node.test, ctx);
-      visitNode(node.consequent, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
-      visitNode(node.alternate, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
+      visit(node.test, newAncestors);
+      markConditional(node.consequent, ctx);
+      visit(node.consequent, newAncestors);
+      if (node.alternate) {
+        markConditional(node.alternate, ctx);
+        visit(node.alternate, newAncestors);
+      }
       return;
     }
 
     if (t.isConditionalExpression(node)) {
-      visitNode(node.test, ctx);
-      visitNode(node.consequent, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
-      visitNode(node.alternate, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
+      visit(node.test, newAncestors);
+      markConditional(node.consequent, ctx);
+      visit(node.consequent, newAncestors);
+      markConditional(node.alternate, ctx);
+      visit(node.alternate, newAncestors);
       return;
     }
 
     if (t.isLogicalExpression(node)) {
-      visitNode(node.left, ctx);
+      visit(node.left, newAncestors);
       // Right side of && or || is conditional
-      visitNode(node.right, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
+      markConditional(node.right, ctx);
+      visit(node.right, newAncestors);
       return;
     }
 
-    // Traverse other node types
-    if (t.isBlockStatement(node)) {
-      for (const stmt of node.body) {
-        visitNode(stmt, ctx);
-      }
-      return;
-    }
-
-    if (t.isExpressionStatement(node)) {
-      visitNode(node.expression, ctx);
-      return;
-    }
-
-    if (t.isReturnStatement(node)) {
-      visitNode(node.argument, ctx);
-      return;
-    }
-
-    if (t.isVariableDeclaration(node)) {
-      for (const decl of node.declarations) {
-        visitNode(decl.init, ctx);
-      }
-      return;
-    }
-
-    if (t.isArrowFunctionExpression(node) || t.isFunctionExpression(node)) {
-      // Don't traverse into other nested functions (they're not executed immediately)
-      return;
-    }
-
-    if (t.isMemberExpression(node)) {
-      visitNode(node.object, ctx);
-      return;
-    }
-
-    if (t.isBinaryExpression(node)) {
-      visitNode(node.left, ctx);
-      visitNode(node.right, ctx);
-      return;
-    }
-
-    if (t.isAwaitExpression(node)) {
-      visitNode(node.argument, ctx);
-      return;
-    }
-
-    if (t.isTryStatement(node)) {
-      visitNode(node.block, ctx);
-      visitNode(node.handler?.body, ctx);
-      visitNode(node.finalizer, ctx);
-      return;
-    }
-
-    // For/while loops - body is conditional (may not execute or execute multiple times)
+    // Loop bodies are conditional
     if (
       t.isForStatement(node) ||
       t.isWhileStatement(node) ||
@@ -499,63 +481,54 @@ function findSettersInCallbacks(
       t.isForOfStatement(node)
     ) {
       if (t.isForStatement(node)) {
-        visitNode(node.init, ctx);
-        visitNode(node.test, ctx);
-        visitNode(node.update, ctx);
+        if (node.init) visit(node.init as t.Node, newAncestors);
+        if (node.test) visit(node.test, newAncestors);
+        if (node.update) visit(node.update, newAncestors);
       }
       if (t.isWhileStatement(node) || t.isDoWhileStatement(node)) {
-        visitNode(node.test, ctx);
+        visit(node.test, newAncestors);
       }
       if (t.isForInStatement(node) || t.isForOfStatement(node)) {
-        visitNode(node.right, ctx);
+        visit(node.right, newAncestors);
       }
-      visitNode(node.body, {
-        ...ctx,
-        conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-      });
+      markConditional(node.body, ctx);
+      visit(node.body, newAncestors);
       return;
     }
 
     // Switch statement
     if (t.isSwitchStatement(node)) {
-      visitNode(node.discriminant, ctx);
+      visit(node.discriminant, newAncestors);
       for (const caseClause of node.cases) {
-        visitNode(caseClause.test, ctx);
+        if (caseClause.test) visit(caseClause.test, newAncestors);
         for (const stmt of caseClause.consequent) {
-          visitNode(stmt, {
-            ...ctx,
-            conditionalDepth: ctx.type ? ctx.conditionalDepth + 1 : 0,
-          });
+          markConditional(stmt, ctx);
+          visit(stmt, newAncestors);
         }
       }
       return;
     }
+
+    // Use VISITOR_KEYS for generic traversal of other node types
+    const keys = t.VISITOR_KEYS[node.type];
+    if (!keys) return;
+
+    for (const key of keys) {
+      const value = (node as unknown as Record<string, unknown>)[key];
+      if (value && typeof value === 'object') {
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item && typeof item === 'object' && 'type' in item) {
+              visit(item as t.Node, newAncestors);
+            }
+          }
+        } else if ('type' in value) {
+          visit(value as t.Node, newAncestors);
+        }
+      }
+    }
   }
 
-  visitNode(body, { type: null, conditionalDepth: 0 });
+  visit(body, []);
   return foundSetters;
-}
-
-/**
- * Export the CFG for debugging/visualization.
- */
-function buildHookCFG(hookBody: t.Node): CFG | null {
-  let bodyToAnalyze: t.BlockStatement | t.Expression | null = null;
-  if (t.isArrowFunctionExpression(hookBody)) {
-    bodyToAnalyze = hookBody.body as t.BlockStatement | t.Expression;
-  } else if (t.isFunctionExpression(hookBody)) {
-    bodyToAnalyze = hookBody.body;
-  } else if (t.isBlockStatement(hookBody)) {
-    bodyToAnalyze = hookBody;
-  }
-
-  if (!bodyToAnalyze) {
-    return null;
-  }
-
-  try {
-    return buildCFG(bodyToAnalyze);
-  } catch {
-    return null;
-  }
 }

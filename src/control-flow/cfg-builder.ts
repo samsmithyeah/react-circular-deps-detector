@@ -21,6 +21,7 @@ import type {
   LoopContext,
   TryContext,
   SwitchContext,
+  BreakableContext,
 } from './cfg-types';
 
 /**
@@ -48,9 +49,13 @@ class CFGBuilder {
     loopStack: [],
     tryStack: [],
     switchStack: [],
+    breakableStack: [],
     finallyStack: [],
     labelMap: new Map(),
   };
+
+  // Current pending label for the next loop/switch (set by processLabeledStatement)
+  private pendingLabel: string | undefined;
 
   constructor(options: CFGBuilderOptions = {}) {
     this.options = {
@@ -361,13 +366,27 @@ class CFGBuilder {
     // Create exit node for after the loop
     const loopExitNode = this.createNode('merge', null, 'loop-exit');
 
+    // Consume any pending label
+    const label = this.pendingLabel;
+    this.pendingLabel = undefined;
+
     // Push loop context
     const loopContext: LoopContext = {
       testNode,
       exitNode: loopExitNode,
       type: 'while',
+      label,
     };
     this.context.loopStack.push(loopContext);
+
+    // Push to unified breakable stack
+    const breakableContext: BreakableContext = {
+      exitNode: loopExitNode,
+      continueTarget: testNode,
+      type: 'loop',
+      label,
+    };
+    this.context.breakableStack.push(breakableContext);
 
     // Process body
     let bodyEnd: CFGNode;
@@ -390,8 +409,9 @@ class CFGBuilder {
     testNode.falseSuccessor = loopExitNode;
     this.connect(testNode, loopExitNode);
 
-    // Pop loop context
+    // Pop loop context and breakable context
     this.context.loopStack.pop();
+    this.context.breakableStack.pop();
 
     return loopExitNode;
   }
@@ -418,13 +438,27 @@ class CFGBuilder {
     // Create exit node
     const loopExitNode = this.createNode('merge', null, 'loop-exit');
 
+    // Consume any pending label
+    const label = this.pendingLabel;
+    this.pendingLabel = undefined;
+
     // Push loop context (continue goes to test in do-while)
     const loopContext: LoopContext = {
       testNode,
       exitNode: loopExitNode,
       type: 'do-while',
+      label,
     };
     this.context.loopStack.push(loopContext);
+
+    // Push to unified breakable stack
+    const breakableContext: BreakableContext = {
+      exitNode: loopExitNode,
+      continueTarget: testNode,
+      type: 'loop',
+      label,
+    };
+    this.context.breakableStack.push(breakableContext);
 
     // Process body
     let bodyEnd: CFGNode;
@@ -447,8 +481,9 @@ class CFGBuilder {
     testNode.falseSuccessor = loopExitNode;
     this.connect(testNode, loopExitNode);
 
-    // Pop loop context
+    // Pop loop context and breakable context
     this.context.loopStack.pop();
+    this.context.breakableStack.pop();
 
     return loopExitNode;
   }
@@ -484,13 +519,28 @@ class CFGBuilder {
     // Create exit node
     const loopExitNode = this.createNode('merge', null, 'loop-exit');
 
+    // Consume any pending label
+    const label = this.pendingLabel;
+    this.pendingLabel = undefined;
+
     // Push loop context (continue goes to update, then test)
+    const continueTarget = updateNode || testNode;
     const loopContext: LoopContext = {
-      testNode: updateNode || testNode,
+      testNode: continueTarget,
       exitNode: loopExitNode,
       type: 'for',
+      label,
     };
     this.context.loopStack.push(loopContext);
+
+    // Push to unified breakable stack
+    const breakableContext: BreakableContext = {
+      exitNode: loopExitNode,
+      continueTarget,
+      type: 'loop',
+      label,
+    };
+    this.context.breakableStack.push(breakableContext);
 
     // Process body
     let bodyEnd: CFGNode;
@@ -518,8 +568,9 @@ class CFGBuilder {
     testNode.falseSuccessor = loopExitNode;
     this.connect(testNode, loopExitNode);
 
-    // Pop loop context
+    // Pop loop context and breakable context
     this.context.loopStack.pop();
+    this.context.breakableStack.pop();
 
     return loopExitNode;
   }
@@ -545,13 +596,27 @@ class CFGBuilder {
     // Create exit node
     const loopExitNode = this.createNode('merge', null, 'loop-exit');
 
+    // Consume any pending label
+    const label = this.pendingLabel;
+    this.pendingLabel = undefined;
+
     // Push loop context
     const loopContext: LoopContext = {
       testNode,
       exitNode: loopExitNode,
       type: loopType as 'for-in' | 'for-of',
+      label,
     };
     this.context.loopStack.push(loopContext);
+
+    // Push to unified breakable stack
+    const breakableContext: BreakableContext = {
+      exitNode: loopExitNode,
+      continueTarget: testNode,
+      type: 'loop',
+      label,
+    };
+    this.context.breakableStack.push(breakableContext);
 
     // Process left (variable declaration or assignment)
     let bodyStart: CFGNode;
@@ -584,8 +649,9 @@ class CFGBuilder {
     testNode.falseSuccessor = loopExitNode;
     this.connect(testNode, loopExitNode);
 
-    // Pop loop context
+    // Pop loop context and breakable context
     this.context.loopStack.pop();
+    this.context.breakableStack.pop();
 
     return loopExitNode;
   }
@@ -609,11 +675,24 @@ class CFGBuilder {
     // Create exit node
     const switchExitNode = this.createNode('merge', null, 'switch-exit');
 
+    // Consume any pending label
+    const label = this.pendingLabel;
+    this.pendingLabel = undefined;
+
     // Push switch context
     const switchContext: SwitchContext = {
       exitNode: switchExitNode,
+      label,
     };
     this.context.switchStack.push(switchContext);
+
+    // Push to unified breakable stack (switch has no continueTarget)
+    const breakableContext: BreakableContext = {
+      exitNode: switchExitNode,
+      type: 'switch',
+      label,
+    };
+    this.context.breakableStack.push(breakableContext);
 
     let previousCaseEnd: CFGNode | null = null;
     let hasDefault = false;
@@ -657,8 +736,9 @@ class CFGBuilder {
       this.connect(discriminantNode, switchExitNode);
     }
 
-    // Pop switch context
+    // Pop switch context and breakable context
     this.context.switchStack.pop();
+    this.context.breakableStack.pop();
 
     return switchExitNode;
   }
@@ -818,22 +898,18 @@ class CFGBuilder {
     breakNode.targetLabel = label;
     this.connect(current, breakNode);
 
-    // Find target (labeled or nearest loop/switch)
+    // Find target (labeled or nearest breakable construct)
     if (label) {
       const target = this.context.labelMap.get(label);
       if (target) {
         this.connect(breakNode, target.exitNode);
       }
     } else {
-      // Break from nearest loop or switch
-      const loopCtx = this.context.loopStack[this.context.loopStack.length - 1];
-      const switchCtx = this.context.switchStack[this.context.switchStack.length - 1];
-
-      // Use whichever is more recent (on top of their respective stacks)
-      if (loopCtx && (!switchCtx || loopCtx.exitNode)) {
-        this.connect(breakNode, loopCtx.exitNode);
-      } else if (switchCtx) {
-        this.connect(breakNode, switchCtx.exitNode);
+      // Break from nearest breakable construct (loop or switch)
+      // Uses the unified breakableStack to correctly handle nesting
+      const breakableCtx = this.context.breakableStack[this.context.breakableStack.length - 1];
+      if (breakableCtx) {
+        this.connect(breakNode, breakableCtx.exitNode);
       }
     }
 
@@ -855,12 +931,19 @@ class CFGBuilder {
 
     // Find target loop
     if (label) {
-      const target = this.context.labelMap.get(label);
-      if (target && 'testNode' in target) {
-        this.connect(continueNode, target.testNode);
+      // For labeled continue, we need to find the loop with that label
+      // The loopStack contains the actual loop contexts with testNode
+      // We look for a loop whose label matches
+      for (let i = this.context.loopStack.length - 1; i >= 0; i--) {
+        const loopCtx = this.context.loopStack[i];
+        if (loopCtx.label === label) {
+          this.connect(continueNode, loopCtx.testNode);
+          break;
+        }
       }
     } else {
-      // Continue to nearest loop
+      // Continue to nearest loop (not switch - continue doesn't apply to switch)
+      // Use loopStack directly for unlabeled continue
       const loopCtx = this.context.loopStack[this.context.loopStack.length - 1];
       if (loopCtx) {
         this.connect(continueNode, loopCtx.testNode);
@@ -872,19 +955,77 @@ class CFGBuilder {
 
   /**
    * Process a labeled statement.
-   * Note: Label tracking for break/continue is partially implemented.
-   * The label is stored in the break/continue nodes for reference,
-   * but full labeled loop support would require refactoring to pass
-   * the label through to the loop processing methods.
+   * Labels are used for break/continue statements to jump to specific loops/switches.
    */
   private processLabeledStatement(
     stmt: t.LabeledStatement,
     current: CFGNode,
     exitNode: CFGNode
   ): CFGNode {
-    // For loops, switches, and other statements, process the body
-    // The label is captured in break/continue nodes via targetLabel property
-    return this.processStatement(stmt.body, current, exitNode);
+    const labelName = stmt.label.name;
+    const body = stmt.body;
+
+    // Check if the body is a loop or switch
+    const isLoop =
+      t.isWhileStatement(body) ||
+      t.isDoWhileStatement(body) ||
+      t.isForStatement(body) ||
+      t.isForInStatement(body) ||
+      t.isForOfStatement(body);
+    const isSwitch = t.isSwitchStatement(body);
+
+    // Create the exit node for this labeled statement
+    const labelExitNode = this.createNode('merge', null, `label-exit:${labelName}`);
+
+    // Create a placeholder context for the label - we'll update it after processing
+    // the loop/switch body when we know the actual continue target
+    const labelContext: BreakableContext = {
+      exitNode: labelExitNode,
+      type: isLoop ? 'loop' : 'switch',
+      label: labelName,
+    };
+
+    // Register the label before processing the body
+    this.context.labelMap.set(labelName, labelContext);
+
+    if (isLoop || isSwitch) {
+      // For loops/switches, set the pending label so the loop/switch handler
+      // can associate it with their contexts
+      this.pendingLabel = labelName;
+
+      // Process the body which will push to breakableStack
+      const bodyEnd = this.processStatement(body, current, exitNode);
+
+      // Clear the pending label (it should have been consumed by the loop/switch)
+      this.pendingLabel = undefined;
+
+      // Clean up label registration
+      this.context.labelMap.delete(labelName);
+
+      // Connect body end to label exit
+      if (!this.isTerminator(bodyEnd)) {
+        this.connect(bodyEnd, labelExitNode);
+      }
+
+      return labelExitNode;
+    } else {
+      // For non-loop/switch statements (like blocks), a label allows break to exit early
+      this.context.breakableStack.push(labelContext);
+
+      // Process the body
+      const bodyEnd = this.processStatement(body, current, exitNode);
+
+      // Clean up
+      this.context.labelMap.delete(labelName);
+      this.context.breakableStack.pop();
+
+      // Connect body end to label exit
+      if (!this.isTerminator(bodyEnd)) {
+        this.connect(bodyEnd, labelExitNode);
+      }
+
+      return labelExitNode;
+    }
   }
 
   /**

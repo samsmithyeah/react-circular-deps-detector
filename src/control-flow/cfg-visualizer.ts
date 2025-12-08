@@ -239,58 +239,6 @@ function escapeLabel(label: string): string {
 }
 
 /**
- * Generate a simple ASCII representation of the CFG for terminal output.
- * Less detailed than DOT but useful for quick debugging.
- */
-function cfgToAscii(cfg: CFG): string {
-  const lines: string[] = [];
-  const visited = new Set<string>();
-
-  function visit(node: CFGNode, indent: string, isLast: boolean): void {
-    if (visited.has(node.id)) {
-      lines.push(`${indent}${isLast ? '└─' : '├─'} ↺ ${node.label} (${node.id})`);
-      return;
-    }
-    visited.add(node.id);
-
-    const prefix = isLast ? '└─' : '├─';
-    const reachableMarker = node.reachable ? '' : ' [unreachable]';
-    lines.push(`${indent}${prefix} ${node.label}${reachableMarker}`);
-
-    const childIndent = indent + (isLast ? '   ' : '│  ');
-
-    // Sort successors for consistent output
-    const successors = [...node.successors].sort((a, b) => {
-      // True branch first, then false, then others
-      if (node.trueSuccessor === a) return -1;
-      if (node.trueSuccessor === b) return 1;
-      if (node.falseSuccessor === a) return 1;
-      if (node.falseSuccessor === b) return -1;
-      return 0;
-    });
-
-    successors.forEach((succ, i) => {
-      const succIsLast = i === successors.length - 1;
-      let label = '';
-      if (node.trueSuccessor === succ) label = ' [T]';
-      else if (node.falseSuccessor === succ) label = ' [F]';
-
-      if (label) {
-        lines.push(`${childIndent}${succIsLast ? '└─' : '├─'}${label}`);
-        visit(succ, childIndent + (succIsLast ? '   ' : '│  '), true);
-      } else {
-        visit(succ, childIndent, succIsLast);
-      }
-    });
-  }
-
-  lines.push('CFG:');
-  visit(cfg.entry, '', true);
-
-  return lines.join('\n');
-}
-
-/**
  * Print CFG statistics.
  */
 export function cfgStats(cfg: CFG): string {

@@ -15,13 +15,13 @@ export type {
   CFG,
   CFGNode,
   CFGNodeType,
-  CFGEdge,
   CFGEdgeType,
   CFGBuilderOptions,
   CFGBuilderContext,
   LoopContext,
   TryContext,
   SwitchContext,
+  BreakableContext,
   ReachabilityResult,
   PathCondition,
   GuardAnalysis,
@@ -34,24 +34,20 @@ export { buildCFG, CFGBuilder } from './cfg-builder';
 // Analyzer
 export {
   analyzeReachability,
-  analyzeSetStateCall,
   findAllPaths,
   extractPathConditions,
   isGuaranteedToExecute,
   analyzeGuards,
   conditionInvolvesVariable,
-  enrichPathConditions,
   computeDominators,
-  dominates,
 } from './cfg-analyzer';
 
 // setState Analyzer (React-specific)
 export {
   analyzeSetStateCalls,
   hasUnconditionalSetStateCFG,
-  buildHookCFG,
   type SetStateAnalysis,
 } from './setState-analyzer';
 
 // Visualizer
-export { cfgToDot, cfgToAscii, cfgStats, type DotOptions } from './cfg-visualizer';
+export { cfgToDot, cfgStats, type DotOptions } from './cfg-visualizer';

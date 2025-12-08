@@ -9,14 +9,7 @@
  */
 
 import * as t from '@babel/types';
-import type {
-  CFG,
-  CFGNode,
-  ReachabilityResult,
-  PathCondition,
-  GuardAnalysis,
-  SetStateAnalysisResult,
-} from './cfg-types';
+import type { CFG, CFGNode, ReachabilityResult, PathCondition, GuardAnalysis } from './cfg-types';
 
 /**
  * Maximum number of paths to enumerate before giving up.
@@ -63,109 +56,6 @@ export function analyzeReachability(cfg: CFG, targetNode: CFGNode): Reachability
     pathConditions,
     hasEffectiveGuard: guardAnalysis.isEffective,
     guardAnalysis,
-  };
-}
-
-/**
- * Analyze whether a setState call will cause an infinite loop.
- */
-function analyzeSetStateCall(
-  cfg: CFG,
-  setStateNode: t.CallExpression,
-  stateVariable: string,
-  dependencyVariables: string[]
-): SetStateAnalysisResult {
-  // Find the CFG node for this setState call
-  const cfgNode = cfg.astNodeToCFGNode.get(setStateNode);
-
-  if (!cfgNode) {
-    return {
-      causesInfiniteLoop: false,
-      mightCauseInfiniteLoop: false,
-      confidence: 'low',
-      reachability: {
-        reachable: false,
-        guaranteedToExecute: false,
-        paths: [],
-        pathConditions: [],
-        hasEffectiveGuard: false,
-      },
-      explanation: 'Could not find setState call in CFG',
-    };
-  }
-
-  // Analyze reachability
-  const reachability = analyzeReachability(cfg, cfgNode);
-
-  if (!reachability.reachable) {
-    return {
-      causesInfiniteLoop: false,
-      mightCauseInfiniteLoop: false,
-      confidence: 'high',
-      reachability,
-      explanation: 'setState call is unreachable (dead code)',
-    };
-  }
-
-  // Check if state variable is in dependencies
-  const stateInDeps = dependencyVariables.includes(stateVariable);
-
-  if (!stateInDeps) {
-    return {
-      causesInfiniteLoop: false,
-      mightCauseInfiniteLoop: false,
-      confidence: 'high',
-      reachability,
-      explanation: `State variable "${stateVariable}" is not in dependency array`,
-    };
-  }
-
-  // If guaranteed to execute with state in deps, it's definitely a loop
-  if (reachability.guaranteedToExecute) {
-    return {
-      causesInfiniteLoop: true,
-      mightCauseInfiniteLoop: true,
-      confidence: 'high',
-      reachability,
-      explanation: `setState("${stateVariable}") is guaranteed to execute every render because "${stateVariable}" is in the dependency array`,
-      suggestedFix: `Add a guard condition to prevent unnecessary state updates, or remove "${stateVariable}" from dependencies`,
-    };
-  }
-
-  // Check if there's an effective guard
-  if (reachability.hasEffectiveGuard && reachability.guardAnalysis) {
-    const { guardAnalysis } = reachability;
-
-    if (guardAnalysis.riskLevel === 'safe') {
-      return {
-        causesInfiniteLoop: false,
-        mightCauseInfiniteLoop: false,
-        confidence: 'high',
-        reachability,
-        explanation: `Guard condition prevents infinite loop: ${guardAnalysis.explanation}`,
-      };
-    }
-
-    if (guardAnalysis.riskLevel === 'risky') {
-      return {
-        causesInfiniteLoop: false,
-        mightCauseInfiniteLoop: true,
-        confidence: 'medium',
-        reachability,
-        explanation: `Guard condition may not prevent infinite loop: ${guardAnalysis.explanation}`,
-        suggestedFix: 'Ensure the guard condition reliably prevents the loop',
-      };
-    }
-  }
-
-  // Conditional execution but unclear if safe
-  return {
-    causesInfiniteLoop: false,
-    mightCauseInfiniteLoop: true,
-    confidence: 'medium',
-    reachability,
-    explanation: `setState("${stateVariable}") is conditionally executed with "${stateVariable}" in dependencies`,
-    suggestedFix: 'Review the conditions to ensure they prevent infinite re-renders',
   };
 }
 
@@ -241,31 +131,33 @@ export function extractPathConditions(path: CFGNode[]): PathCondition[] {
 /**
  * Check if a node is guaranteed to execute (dominates the exit).
  *
- * A node is guaranteed to execute if:
- * 1. It's the entry node, OR
- * 2. All paths from entry to exit pass through this node
+ * A node is guaranteed to execute if and only if it dominates the exit node.
+ * This means all paths from entry to exit must pass through this node.
  *
- * For our purposes, we use a simpler heuristic:
- * - No branch nodes between entry and this node have both successors
- *   that can reach exit without going through this node
+ * Uses dominator tree computation which is O(n²) worst case but much more
+ * efficient than path enumeration for graphs with many paths.
+ *
+ * @param cfg - The control flow graph
+ * @param target - The node to check
+ * @param dominators - Optional pre-computed dominators (for efficiency when checking multiple nodes)
  */
-export function isGuaranteedToExecute(cfg: CFG, target: CFGNode): boolean {
+export function isGuaranteedToExecute(
+  cfg: CFG,
+  target: CFGNode,
+  dominators?: Map<string, Set<string>>
+): boolean {
   // If target is entry, it's guaranteed
   if (target === cfg.entry) return true;
 
-  // Find all paths from entry to exit
-  const pathsToExit = findAllPaths(cfg.entry, cfg.exit);
+  // If target is the exit, it's guaranteed (all paths end at exit)
+  if (target === cfg.exit) return true;
 
-  // Check if target is on all paths
-  for (const path of pathsToExit) {
-    const containsTarget = path.some((node) => node === target);
-    if (!containsTarget) {
-      // Found a path that doesn't go through target
-      return false;
-    }
-  }
+  // Compute dominators if not provided
+  const doms = dominators ?? computeDominators(cfg);
 
-  return true;
+  // A node is guaranteed to execute if it dominates the exit node
+  const exitDominators = doms.get(cfg.exit.id);
+  return exitDominators?.has(target.id) ?? false;
 }
 
 /**
@@ -421,6 +313,9 @@ function analyzeToggleGuard(
 
 /**
  * Check if a condition involves a specific variable.
+ *
+ * Uses Babel's VISITOR_KEYS for robust AST traversal, avoiding traversal
+ * of non-AST properties like 'loc', 'start', 'end', etc.
  */
 export function conditionInvolvesVariable(condition: t.Node, variableName: string): boolean {
   let found = false;
@@ -433,8 +328,11 @@ export function conditionInvolvesVariable(condition: t.Node, variableName: strin
       return;
     }
 
-    // Traverse child nodes
-    for (const key of Object.keys(node)) {
+    // Use VISITOR_KEYS for robust traversal of only AST child nodes
+    const keys = t.VISITOR_KEYS[node.type];
+    if (!keys) return;
+
+    for (const key of keys) {
       const value = (node as unknown as Record<string, unknown>)[key];
       if (value && typeof value === 'object') {
         if (Array.isArray(value)) {
@@ -452,26 +350,6 @@ export function conditionInvolvesVariable(condition: t.Node, variableName: strin
 
   visit(condition);
   return found;
-}
-
-/**
- * Enrich path conditions with state variable information.
- */
-function enrichPathConditions(
-  conditions: PathCondition[],
-  stateVariables: string[]
-): PathCondition[] {
-  return conditions.map((condition) => {
-    for (const stateVar of stateVariables) {
-      if (conditionInvolvesVariable(condition.conditionNode, stateVar)) {
-        return {
-          ...condition,
-          involvesStateVariable: true,
-        };
-      }
-    }
-    return condition;
-  });
 }
 
 /**
@@ -542,18 +420,4 @@ export function computeDominators(cfg: CFG): Map<string, Set<string>> {
   }
 
   return dominators;
-}
-
-/**
- * Check if node A dominates node B.
- */
-function dominates(
-  cfg: CFG,
-  a: CFGNode,
-  b: CFGNode,
-  dominators?: Map<string, Set<string>>
-): boolean {
-  const doms = dominators ?? computeDominators(cfg);
-  const bDominators = doms.get(b.id);
-  return bDominators?.has(a.id) ?? false;
 }

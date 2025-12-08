@@ -200,31 +200,9 @@ export interface GuardAnalysis {
 }
 
 /**
- * Edge in the CFG representing control flow between nodes.
- * This is an implicit structure - edges are represented by
- * predecessors/successors arrays in CFGNode.
- */
-interface CFGEdge {
-  /** Source node */
-  from: CFGNode;
-
-  /** Target node */
-  to: CFGNode;
-
-  /** Type of edge */
-  type: CFGEdgeType;
-
-  /** For conditional edges, which branch (true/false) */
-  branch?: 'true' | 'false';
-
-  /** For exception edges, the exception type if known */
-  exceptionType?: string;
-}
-
-/**
  * Types of edges in the CFG.
  */
-export type CFGEdgeType =
+type CFGEdgeType =
   | 'sequential' // Normal sequential flow
   | 'conditional-true' // True branch of conditional
   | 'conditional-false' // False branch of conditional
@@ -279,11 +257,17 @@ export interface CFGBuilderContext {
   /** Stack of active switch statements for break handling */
   switchStack: SwitchContext[];
 
+  /**
+   * Unified stack of breakable constructs (loops and switches) in order of nesting.
+   * Used for unlabeled break statements to find the innermost breakable construct.
+   */
+  breakableStack: BreakableContext[];
+
   /** Current finally blocks that must be executed before returning */
   finallyStack: CFGNode[];
 
   /** Map of labels to their target contexts */
-  labelMap: Map<string, LoopContext | SwitchContext>;
+  labelMap: Map<string, BreakableContext>;
 }
 
 /**
@@ -329,9 +313,27 @@ export interface SwitchContext {
 }
 
 /**
+ * Unified context for any breakable construct (loop or switch).
+ * Used to correctly handle unlabeled break statements.
+ */
+export interface BreakableContext {
+  /** The node to jump to on break */
+  exitNode: CFGNode;
+
+  /** For loops: the node to jump to on continue */
+  continueTarget?: CFGNode;
+
+  /** Optional label for the construct */
+  label?: string;
+
+  /** Type of breakable construct */
+  type: 'loop' | 'switch';
+}
+
+/**
  * Result of checking if a setState call causes an infinite loop.
  */
-export interface SetStateAnalysisResult {
+interface SetStateAnalysisResult {
   /** Whether this setState definitely causes an infinite loop */
   causesInfiniteLoop: boolean;
 
