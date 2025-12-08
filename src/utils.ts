@@ -26,13 +26,6 @@ export function setCurrentOptions(options: AnalyzerOptions): void {
 }
 
 /**
- * Get the current analyzer options
- */
-export function getCurrentOptions(): AnalyzerOptions {
-  return currentOptions;
-}
-
-/**
  * Check if a hook at the given line should be ignored based on comments.
  * Supports:
  * - // rcd-ignore (on same line)

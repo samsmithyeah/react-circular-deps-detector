@@ -388,57 +388,32 @@ export function analyzeStateInteractions(
       if (setterNames.includes(calleeName)) {
         const stateVar = setterToState.get(calleeName);
 
-        // Check if this modification is inside an async callback (setInterval, onSnapshot, etc.)
-        // If so, it's deferred and won't cause immediate re-render loops
+        // Check if this modification is inside an async callback (deferred)
         if (isInsideAsyncCallback()) {
           interactions.deferredModifications.push(calleeName);
-          // Also check for functional updates even in deferred context
-          if (
-            node.arguments &&
-            node.arguments.length > 0 &&
-            (node.arguments[0].type === 'ArrowFunctionExpression' ||
-              node.arguments[0].type === 'FunctionExpression')
-          ) {
-            interactions.functionalUpdates.push(calleeName);
-          }
-          // Skip further analysis - deferred modifications are safe
-          ancestorStack.pop();
-          // Still need to visit children
-          const indexableCallNode = node as unknown as Record<string, unknown>;
-          Object.keys(node).forEach((key) => {
-            const value = indexableCallNode[key];
-            if (Array.isArray(value)) {
-              value.forEach((child) => visitNode(child as t.Node | null | undefined, node));
-            } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
-              visitNode(value as t.Node, node);
-            }
-          });
-          return;
-        }
-
-        // Enhanced: analyze the conditional guard if present
-        const guardAnalysis = analyzeConditionalGuard(
-          node,
-          ancestorStack,
-          calleeName,
-          stateVar,
-          stateNames
-        );
-
-        if (guardAnalysis) {
-          interactions.guardedModifications.push(guardAnalysis);
-          if (guardAnalysis.isSafe) {
-            // Don't add to conditionalModifications if we know it's safe
-          } else {
-            interactions.conditionalModifications.push(calleeName);
-          }
         } else {
-          // If we couldn't analyze the guard, treat as a regular modification
-          // The CFG-based analysis will determine if it's truly unconditional
-          interactions.modifications.push(calleeName);
+          // Not deferred, so analyze for loop risks
+          const guardAnalysis = analyzeConditionalGuard(
+            node,
+            ancestorStack,
+            calleeName,
+            stateVar,
+            stateNames
+          );
+
+          if (guardAnalysis) {
+            interactions.guardedModifications.push(guardAnalysis);
+            if (!guardAnalysis.isSafe) {
+              interactions.conditionalModifications.push(calleeName);
+            }
+          } else {
+            // If we couldn't analyze the guard, treat as a regular modification
+            // The CFG-based analysis will determine if it's truly unconditional
+            interactions.modifications.push(calleeName);
+          }
         }
 
-        // Check if it's a functional update
+        // Check if it's a functional update (applies to both deferred and non-deferred calls)
         if (
           node.arguments &&
           node.arguments.length > 0 &&
