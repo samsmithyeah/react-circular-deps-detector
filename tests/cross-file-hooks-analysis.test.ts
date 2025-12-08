@@ -1,4 +1,4 @@
-import { analyzeHooksIntelligently } from '../src/intelligent-hooks-analyzer';
+import { analyzeHooks } from '../src/orchestrator';
 import { parseFile } from '../src/parser';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -119,7 +119,7 @@ export function SafeImportComponent() {
     it('should detect infinite loops caused by direct cross-file state modifications', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should detect the direct cross-file infinite loop
       const crossFileLoops = results.filter(
@@ -142,7 +142,7 @@ export function SafeImportComponent() {
     it('should detect nested cross-file state modifications', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should detect the nested cross-file infinite loop
       const nestedLoop = results.find(
@@ -161,7 +161,7 @@ export function SafeImportComponent() {
     it('should provide detailed information about cross-file modifications', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       const crossFileLoop = results.find(
         (r) => r.type === 'confirmed-infinite-loop' && r.problematicDependency === 'user'
@@ -180,7 +180,7 @@ export function SafeImportComponent() {
     it('should not flag safe cross-file function calls', () => {
       const safeComponentFile = path.join(testDir, 'safe-component.tsx');
       const parsedFile = parseFile(safeComponentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should not detect any infinite loops in safe component
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
@@ -192,7 +192,7 @@ export function SafeImportComponent() {
     it('should handle cross-file imports that do not modify state', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // The safe component in the same file should not trigger false positives
       const safeComponentIssues = results.filter(
@@ -210,10 +210,10 @@ export function SafeImportComponent() {
 
       // Should not throw and should analyze cross-file relationships
       expect(() => {
-        analyzeHooksIntelligently([parsedFile]);
+        analyzeHooks([parsedFile]);
       }).not.toThrow();
 
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should have found cross-file modifications
       const hasIntelligentResults = results.length > 0;
@@ -223,7 +223,7 @@ export function SafeImportComponent() {
     it('should trace function call chains across files', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should detect both direct and nested modifications
       const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
@@ -241,7 +241,7 @@ export function SafeImportComponent() {
 
       const parsedFiles = [parseFile(componentFile), parseFile(safeComponentFile)];
 
-      const results = analyzeHooksIntelligently(parsedFiles);
+      const results = analyzeHooks(parsedFiles);
 
       // Should detect issues in problematic file but not in safe file
       const componentIssues = results.filter(
@@ -260,7 +260,7 @@ export function SafeImportComponent() {
     it('should detect state setters passed as function parameters', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       const crossFileLoop = results.find(
         (r) => r.type === 'confirmed-infinite-loop' && r.problematicDependency === 'user'
@@ -276,7 +276,7 @@ export function SafeImportComponent() {
     it('should distinguish between different setter functions', () => {
       const componentFile = path.join(testDir, 'cross-file-component.tsx');
       const parsedFile = parseFile(componentFile);
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
@@ -294,7 +294,7 @@ export function SafeImportComponent() {
 
       expect(() => {
         const parsedFile = parseFile(invalidFile);
-        analyzeHooksIntelligently([parsedFile]);
+        analyzeHooks([parsedFile]);
       }).toThrow(); // parseFile should throw, but if it doesn't, analyzer should handle gracefully
 
       // Clean up
@@ -321,10 +321,10 @@ export function ComponentWithMissingImport() {
       const parsedFile = parseFile(componentWithMissingImport);
 
       expect(() => {
-        analyzeHooksIntelligently([parsedFile]);
+        analyzeHooks([parsedFile]);
       }).not.toThrow();
 
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
 
       // Should not crash and should return some analysis
       expect(Array.isArray(results)).toBe(true);
@@ -339,7 +339,7 @@ export function ComponentWithMissingImport() {
 
       expect(() => {
         const parsedFile = parseFile(emptyFile);
-        analyzeHooksIntelligently([parsedFile]);
+        analyzeHooks([parsedFile]);
       }).not.toThrow();
 
       // Clean up
@@ -355,7 +355,7 @@ export function ComponentWithMissingImport() {
       const parsedFiles = [parseFile(componentFile), parseFile(safeComponentFile)];
 
       const startTime = Date.now();
-      const results = analyzeHooksIntelligently(parsedFiles);
+      const results = analyzeHooks(parsedFiles);
       const endTime = Date.now();
 
       // Should complete analysis in reasonable time (less than 5 seconds)
@@ -370,7 +370,7 @@ export function ComponentWithMissingImport() {
       const parsedFile = parseFile(componentFile);
 
       // Should complete without hanging
-      const results = analyzeHooksIntelligently([parsedFile]);
+      const results = analyzeHooks([parsedFile]);
       expect(results).toBeDefined();
     });
   });

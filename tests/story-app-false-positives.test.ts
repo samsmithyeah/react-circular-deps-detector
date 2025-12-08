@@ -7,7 +7,7 @@
  * 3. Zustand's getState() pattern for stable actions
  */
 
-import { analyzeHooksIntelligently } from '../src/intelligent-hooks-analyzer';
+import { analyzeHooks } from '../src/orchestrator';
 import { parseFile, ParsedFile } from '../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -57,7 +57,7 @@ describe('Story-App False Positives', () => {
         async function fetchStyles() { return []; }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -85,7 +85,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -124,7 +124,7 @@ describe('Story-App False Positives', () => {
         async function fetchStyles() { return []; }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -152,7 +152,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -203,7 +203,7 @@ describe('Story-App False Positives', () => {
         async function getAuthenticatedUrl(id: string) { return ''; }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -239,7 +239,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -266,7 +266,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -315,7 +315,7 @@ describe('Story-App False Positives', () => {
         function navigate(id: string) {}
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -346,7 +346,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -396,7 +396,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
       const potentialIssues = results.filter((r) => r.type === 'potential-issue');
 
@@ -431,7 +431,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // SHOULD be flagged as confirmed infinite loop
@@ -457,7 +457,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -481,7 +481,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -506,7 +506,7 @@ describe('Story-App False Positives', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );

@@ -5,7 +5,7 @@
  * Tests marked with .skip are for features not yet implemented.
  */
 
-import { analyzeHooksIntelligently } from '../src/intelligent-hooks-analyzer';
+import { analyzeHooks } from '../src/orchestrator';
 import { parseFile, ParsedFile } from '../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -62,7 +62,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -88,7 +88,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -109,7 +109,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops.length).toBeGreaterThan(0);
@@ -136,7 +136,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -166,7 +166,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const issues = results.filter(
         (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
       );
@@ -194,7 +194,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Custom hooks are treated as stable to avoid false positives
@@ -219,7 +219,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -241,7 +241,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -266,7 +266,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -291,7 +291,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged as infinite loop due to equality guard
@@ -315,7 +315,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops.length).toBeGreaterThan(0);
@@ -338,7 +338,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // useCallback cannot cause infinite loops by itself
@@ -367,7 +367,7 @@ describe('Gemini Feedback: Implemented Fixes', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
 
       // Should not flag anything - functional updater in useCallback is completely safe
       const issues = results.filter(
@@ -427,7 +427,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       // Should warn about object reference issue
       const issues = results.filter(
         (r) => r.type === 'potential-issue' || r.type === 'confirmed-infinite-loop'
@@ -460,7 +460,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged as infinite loop due to equality guard
@@ -487,7 +487,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -518,7 +518,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -543,7 +543,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -568,7 +568,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -593,7 +593,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);
@@ -622,7 +622,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // handleScroll is passed as reference (not invoked), so no infinite loop
@@ -646,7 +646,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops.length).toBeGreaterThan(0);
@@ -670,7 +670,7 @@ describe('Gemini Feedback: Pending Improvements', () => {
         }
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       expect(infiniteLoops).toHaveLength(0);

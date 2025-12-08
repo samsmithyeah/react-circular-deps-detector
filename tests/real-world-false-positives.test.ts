@@ -6,7 +6,7 @@
  * flagged as a "CONFIRMED infinite loop" before the async callback detection fix.
  */
 
-import { analyzeHooksIntelligently } from '../src/intelligent-hooks-analyzer';
+import { analyzeHooks } from '../src/orchestrator';
 import { parseFile, ParsedFile } from '../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -69,7 +69,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         export default OutgoingSignalCard;
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setCurrentTime is inside setInterval (deferred)
@@ -140,7 +140,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         const db = {};
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setCrewsCache/setUsersCache are inside onSnapshot (deferred)
@@ -207,7 +207,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         const db = {};
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // Should NOT be flagged - setAllContacts is inside onSnapshot with functional updater
@@ -265,7 +265,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         const db = {};
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // None should be flagged as infinite loops - all are deferred
@@ -290,7 +290,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         };
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // SHOULD be flagged - direct modification in useEffect
@@ -322,7 +322,7 @@ describe('Real-World False Positives from GoingOutApp', () => {
         };
       `);
 
-      const results = analyzeHooksIntelligently([parsed]);
+      const results = analyzeHooks([parsed]);
       const infiniteLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
 
       // SHOULD flag the direct setCount call
