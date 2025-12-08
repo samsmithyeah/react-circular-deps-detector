@@ -321,3 +321,62 @@ export function isArrayLiteral(node: TSESTree.Node): boolean {
 export function isFunctionExpression(node: TSESTree.Node): boolean {
   return node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression';
 }
+
+/**
+ * Check if a value is an AST node
+ */
+export function isAstNode(value: unknown): value is TSESTree.Node {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'type' in value &&
+    typeof (value as { type: unknown }).type === 'string'
+  );
+}
+
+/**
+ * Find all setter calls in a function body.
+ * Returns an array of setter names found.
+ *
+ * @param body - The AST node to search
+ * @param isSetterFn - Function to check if a name is a setter
+ */
+export function findSetterCallsInBody(
+  body: TSESTree.Node,
+  isSetterFn: (name: string) => boolean
+): string[] {
+  const setters: string[] = [];
+  const visited = new WeakSet<TSESTree.Node>();
+
+  function visit(node: TSESTree.Node) {
+    if (visited.has(node)) return;
+    visited.add(node);
+
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
+      const name = node.callee.name;
+      if (isSetterFn(name)) {
+        setters.push(name);
+      }
+    }
+
+    // Recursively visit children (skip 'parent' and 'loc' to avoid non-node objects)
+    for (const key of Object.keys(node)) {
+      if (key === 'parent' || key === 'loc' || key === 'range') continue;
+      const value = (node as unknown as Record<string, unknown>)[key];
+      if (value && typeof value === 'object') {
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (isAstNode(item)) {
+              visit(item);
+            }
+          }
+        } else if (isAstNode(value)) {
+          visit(value);
+        }
+      }
+    }
+  }
+
+  visit(body);
+  return setters;
+}

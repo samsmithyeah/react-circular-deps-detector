@@ -26,7 +26,13 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { isSetterName, getStateNameFromSetter, STATE_HOOKS, EFFECT_HOOKS } from '../utils';
+import {
+  isSetterName,
+  getStateNameFromSetter,
+  STATE_HOOKS,
+  EFFECT_HOOKS,
+  isAstNode,
+} from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -169,18 +175,6 @@ export default createRule<[Options], MessageIds>({
       }
 
       return deps;
-    }
-
-    /**
-     * Check if a value is an AST node
-     */
-    function isAstNode(value: unknown): value is TSESTree.Node {
-      return (
-        value !== null &&
-        typeof value === 'object' &&
-        'type' in value &&
-        typeof (value as { type: unknown }).type === 'string'
-      );
     }
 
     /**

@@ -24,7 +24,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { isSetterName, STATE_HOOKS } from '../utils';
+import { isSetterName, STATE_HOOKS, findSetterCallsInBody } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -91,55 +91,10 @@ export default createRule<[Options], MessageIds>({
     }
 
     /**
-     * Check if a value is an AST node
+     * Check if a name is a setter (either tracked or matches pattern)
      */
-    function isAstNode(value: unknown): value is TSESTree.Node {
-      return (
-        value !== null &&
-        typeof value === 'object' &&
-        'type' in value &&
-        typeof (value as { type: unknown }).type === 'string'
-      );
-    }
-
-    /**
-     * Find setter calls in a function body
-     */
-    function findSetterCalls(body: TSESTree.Node): string[] {
-      const setters: string[] = [];
-      const visited = new WeakSet<TSESTree.Node>();
-
-      function visit(node: TSESTree.Node) {
-        if (visited.has(node)) return;
-        visited.add(node);
-
-        if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
-          const name = node.callee.name;
-          if (stateSetters.has(name) || isSetterName(name)) {
-            setters.push(name);
-          }
-        }
-
-        // Recursively visit children (skip 'parent' and 'loc' to avoid non-node objects)
-        for (const key of Object.keys(node)) {
-          if (key === 'parent' || key === 'loc' || key === 'range') continue;
-          const value = (node as unknown as Record<string, unknown>)[key];
-          if (value && typeof value === 'object') {
-            if (Array.isArray(value)) {
-              for (const item of value) {
-                if (isAstNode(item)) {
-                  visit(item);
-                }
-              }
-            } else if (isAstNode(value)) {
-              visit(value);
-            }
-          }
-        }
-      }
-
-      visit(body);
-      return setters;
+    function isSetter(name: string): boolean {
+      return stateSetters.has(name) || isSetterName(name);
     }
 
     /**
@@ -166,7 +121,7 @@ export default createRule<[Options], MessageIds>({
       }
 
       // Find setState calls
-      const setterCalls = findSetterCalls(callback.body);
+      const setterCalls = findSetterCallsInBody(callback.body, isSetter);
 
       if (setterCalls.length > 0) {
         // Has setState calls - this is a guaranteed infinite loop

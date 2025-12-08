@@ -29,6 +29,7 @@ export default [
       'react-loop-detector/no-render-phase-setstate': 'error',
       'react-loop-detector/no-effect-loop': 'error',
       'react-loop-detector/no-unstable-deps': 'warn',
+      'react-loop-detector/no-unstable-variable-deps': 'error',
       'react-loop-detector/no-missing-deps-array': 'error',
     },
   },
@@ -44,6 +45,7 @@ export default [
     "react-loop-detector/no-render-phase-setstate": "error",
     "react-loop-detector/no-effect-loop": "error",
     "react-loop-detector/no-unstable-deps": "warn",
+    "react-loop-detector/no-unstable-variable-deps": "error",
     "react-loop-detector/no-missing-deps-array": "error"
   }
 }
@@ -151,6 +153,63 @@ function Component() {
 }
 ```
 
+### `no-unstable-variable-deps`
+
+Detects variables with unstable references (objects, arrays, functions created inside the component) used in hook dependency arrays. This catches the common pattern that caused the Cloudflare outage.
+
+```jsx
+// Bad - object variable created in component
+function Component() {
+  const config = { key: 'value' }; // New object every render
+  useEffect(() => {
+    fetch(config.url);
+  }, [config]); // Error: config changes every render, causing infinite loop
+}
+
+// Bad - array variable created in component
+function Component() {
+  const items = [1, 2, 3]; // New array every render
+  useEffect(() => {
+    process(items);
+  }, [items]); // Error: items changes every render
+}
+
+// Bad - function variable created in component
+function Component() {
+  const handler = () => console.log('click'); // New function every render
+  useEffect(() => {
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [handler]); // Error: handler changes every render
+}
+
+// Good - memoized object
+function Component() {
+  const config = useMemo(() => ({ key: 'value' }), []);
+  useEffect(() => {
+    fetch(config.url);
+  }, [config]); // OK: stable reference
+}
+
+// Good - memoized callback
+function Component() {
+  const handler = useCallback(() => console.log('click'), []);
+  useEffect(() => {
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [handler]); // OK: stable reference
+}
+
+// Good - module-level constant
+const CONFIG = { key: 'value' };
+
+function Component() {
+  useEffect(() => {
+    fetch(CONFIG.url);
+  }, [CONFIG]); // OK: stable reference (defined outside component)
+}
+```
+
 ### `no-missing-deps-array`
 
 Requires a dependency array in useEffect when setState is called. Without a dependency array, the effect runs on every render, causing an infinite loop.
@@ -185,6 +244,7 @@ Enables all rules with sensible defaults:
 - `no-render-phase-setstate`: error
 - `no-effect-loop`: error
 - `no-unstable-deps`: warn
+- `no-unstable-variable-deps`: error
 - `no-missing-deps-array`: error
 
 ### `strict`

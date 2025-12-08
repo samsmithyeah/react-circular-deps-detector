@@ -26,7 +26,7 @@
     "useCallback",
     "useMemo"
   ],
-  "author": "",
+  "author": "Sam Smith",
   "license": "MIT",
   "peerDependencies": {
     "eslint": ">=8.0.0"
