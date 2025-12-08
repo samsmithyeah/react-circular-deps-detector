@@ -66,3 +66,24 @@ jobs:
       - name: Run eslint-plugin tests
         run: npm test
         working-directory: eslint-plugin
+
+      # VS Code Extension
+      - name: Install vscode-extension dependencies
+        run: npm ci
+        working-directory: vscode-extension
+
+      - name: Check vscode-extension formatting
+        run: npm run format:check
+        working-directory: vscode-extension
+
+      - name: Lint vscode-extension
+        run: npm run lint
+        working-directory: vscode-extension
+
+      - name: Check vscode-extension for unused dependencies
+        run: npm run knip
+        working-directory: vscode-extension
+
+      - name: Build vscode-extension
+        run: npm run build
+        working-directory: vscode-extension

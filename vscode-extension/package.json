@@ -1,0 +1,162 @@
+{
+  "name": "vscode-react-loop-detector",
+  "displayName": "React Loop Detector",
+  "description": "Detect infinite re-render risks and circular dependencies in React hooks",
+  "version": "0.1.0",
+  "publisher": "samsmithyeah",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samsmithyeah/react-circular-deps-detector.git",
+    "directory": "vscode-extension"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "react",
+    "hooks",
+    "infinite-loop",
+    "circular-dependencies",
+    "useEffect",
+    "useCallback",
+    "useMemo",
+    "static-analysis"
+  ],
+  "activationEvents": [
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
+  "main": "./dist/client/extension.js",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "React Loop Detector",
+      "properties": {
+        "reactLoopDetector.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable or disable the React Loop Detector extension. When disabled, no analysis will run and all diagnostics will be cleared."
+        },
+        "reactLoopDetector.minSeverity": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "enumDescriptions": [
+            "Only show critical issues (guaranteed infinite loops)",
+            "Show critical issues and potential bugs",
+            "Show all issues including performance warnings"
+          ],
+          "default": "low",
+          "markdownDescription": "Minimum severity level to report. **High** = guaranteed crashes, **Medium** = potential logic bugs, **Low** = unnecessary re-renders."
+        },
+        "reactLoopDetector.minConfidence": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "enumDescriptions": [
+            "Only show issues the analyzer is very confident about",
+            "Show issues with medium or high confidence",
+            "Show all issues regardless of confidence"
+          ],
+          "default": "low",
+          "markdownDescription": "Minimum confidence level to report. Higher confidence means fewer false positives but may miss some real issues."
+        },
+        "reactLoopDetector.strictMode": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable TypeScript-based stability detection for more accurate analysis. Uses the TypeScript compiler to understand types like `Readonly<T>`, `as const`, and generic return types. Requires a valid `tsconfig.json`."
+        },
+        "reactLoopDetector.debounceMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 100,
+          "maximum": 10000,
+          "markdownDescription": "Debounce delay in milliseconds before running full cross-file analysis after file changes. Lower values provide faster feedback but use more CPU. Single-file analysis always runs with 100ms debounce."
+        },
+        "reactLoopDetector.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "markdownDescription": "Traces the communication between VS Code and the language server. Useful for debugging extension issues."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "reactLoopDetector.analyzeWorkspace",
+        "title": "Analyze Workspace",
+        "category": "React Loop Detector",
+        "icon": "$(search)"
+      },
+      {
+        "command": "reactLoopDetector.clearCache",
+        "title": "Clear Cache",
+        "category": "React Loop Detector",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "reactLoopDetector.showStats",
+        "title": "Show Statistics",
+        "category": "React Loop Detector",
+        "icon": "$(graph)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "tsc -p ./client/tsconfig.json",
+    "build:server": "tsc -p ./server/tsconfig.json",
+    "dev": "concurrently \"npm run watch:client\" \"npm run watch:server\"",
+    "watch": "concurrently \"npm run watch:client\" \"npm run watch:server\"",
+    "watch:client": "tsc -w -p ./client/tsconfig.json",
+    "watch:server": "tsc -w -p ./server/tsconfig.json",
+    "test": "echo \"No tests yet\"",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "knip": "knip",
+    "knip:fix": "knip --fix",
+    "check:all": "npm run lint && npm run format:check && npm run knip",
+    "fix:all": "npm run lint:fix && npm run format && npm run knip:fix",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "concurrently": "^9.0.0",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "knip": "^5.71.0",
+    "prettier": "^3.7.4",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.48.1"
+  },
+  "dependencies": {
+    "react-loop-detector": "file:..",
+    "vscode-languageclient": "^9.0.0",
+    "vscode-languageserver": "^9.0.0",
+    "vscode-languageserver-textdocument": "^1.0.0"
+  }
+}
