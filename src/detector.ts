@@ -7,7 +7,13 @@ import Piscina from 'piscina';
 import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { analyzeHooks, HookAnalysis } from './orchestrator';
-import { loadConfigWithInfo, RcdConfig, severityLevel, confidenceLevel } from './config';
+import {
+  loadConfigWithInfo,
+  mergeConfig,
+  RcdConfig,
+  severityLevel,
+  confidenceLevel,
+} from './config';
 import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
 
@@ -63,21 +69,7 @@ export async function detectCircularDependencies(
     noPresets: options.config?.noPresets,
   });
   const config = options.config
-    ? {
-        ...configResult.config,
-        ...options.config,
-        // Merge arrays rather than replace
-        stableHooks: [...configResult.config.stableHooks, ...(options.config.stableHooks || [])],
-        unstableHooks: [
-          ...configResult.config.unstableHooks,
-          ...(options.config.unstableHooks || []),
-        ],
-        ignore: [...configResult.config.ignore, ...(options.config.ignore || [])],
-        customFunctions: {
-          ...configResult.config.customFunctions,
-          ...options.config.customFunctions,
-        },
-      }
+    ? mergeConfig(configResult.config, options.config)
     : configResult.config;
 
   // Merge config ignore patterns with CLI ignore patterns

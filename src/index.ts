@@ -93,6 +93,7 @@ export {
   loadConfig,
   loadConfigWithInfo,
   LoadConfigResult,
+  mergeConfig,
   RcdConfig,
   DEFAULT_CONFIG,
   severityLevel,

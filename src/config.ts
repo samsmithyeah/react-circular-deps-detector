@@ -256,7 +256,8 @@ function readDependencies(packageJsonPath: string): Record<string, string> {
       ...(pkg.dependencies || {}),
       ...(pkg.devDependencies || {}),
     };
-  } catch {
+  } catch (error) {
+    console.warn(`Warning: Could not read dependencies from ${packageJsonPath}:`, error);
     return {};
   }
 }
@@ -264,7 +265,7 @@ function readDependencies(packageJsonPath: string): Record<string, string> {
 /**
  * Merge user config with defaults
  */
-function mergeConfig(
+export function mergeConfig(
   defaults: Required<RcdConfig>,
   userConfig: Partial<RcdConfig>
 ): Required<RcdConfig> {
