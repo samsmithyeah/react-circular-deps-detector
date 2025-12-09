@@ -120,6 +120,8 @@ export interface StateInteraction {
   functionReferences: FunctionReference[];
   /** Track ref.current mutations - e.g., ref.current = value */
   refMutations: RefMutation[];
+  /** Modifications inside cleanup functions (return () => setState()) - can cause loops when effect re-runs */
+  cleanupModifications: string[];
 }
 
 export interface RefMutation {

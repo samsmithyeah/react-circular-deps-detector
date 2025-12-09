@@ -16,6 +16,124 @@ import { isHookIgnored, createAnalysis } from './utils';
 import { analyzeConditionalGuard } from './guard-analyzer';
 
 /**
+ * Build a map of local functions to the state setters they call (directly or transitively).
+ * This is used to detect indirect state modifications through function calls.
+ *
+ * For example:
+ * ```
+ * const outerFn = () => { innerFn(); };
+ * const innerFn = () => { setCount(c => c + 1); };
+ * useEffect(() => { outerFn(); }, [count]); // Indirect loop via outerFn -> innerFn -> setCount
+ * ```
+ */
+export function buildLocalFunctionSetterMap(
+  ast: t.Node,
+  stateInfo: Map<string, string>
+): Map<string, string[]> {
+  const setterNames = new Set(stateInfo.values());
+  const functionsCallingSetters = new Map<string, string[]>();
+  const functionCallingFunctions = new Map<string, string[]>(); // function -> functions it calls
+
+  // Helper to find setters called within a function body
+  function findSettersCalledInFunction(funcNode: t.Node): string[] {
+    const settersCalled: string[] = [];
+    traverse(funcNode, {
+      noScope: true,
+      CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+        if (t.isIdentifier(innerCallPath.node.callee)) {
+          const calleeName = innerCallPath.node.callee.name;
+          if (setterNames.has(calleeName)) {
+            settersCalled.push(calleeName);
+          }
+        }
+      },
+    });
+    return settersCalled;
+  }
+
+  // Helper to find other local functions called within a function body
+  function findFunctionsCalledInFunction(funcNode: t.Node, knownFunctions: Set<string>): string[] {
+    const functionsCalled: string[] = [];
+    traverse(funcNode, {
+      noScope: true,
+      CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+        if (t.isIdentifier(innerCallPath.node.callee)) {
+          const calleeName = innerCallPath.node.callee.name;
+          if (knownFunctions.has(calleeName)) {
+            functionsCalled.push(calleeName);
+          }
+        }
+      },
+    });
+    return functionsCalled;
+  }
+
+  // First pass: collect all function definitions and what they call directly
+  const functionBodies = new Map<string, t.Node>();
+
+  traverse(ast, {
+    VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
+      if (!t.isIdentifier(varPath.node.id)) return;
+      const varName = varPath.node.id.name;
+      const init = varPath.node.init;
+
+      if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
+        functionBodies.set(varName, init);
+        const settersCalled = findSettersCalledInFunction(init);
+        if (settersCalled.length > 0) {
+          functionsCallingSetters.set(varName, settersCalled);
+        }
+      }
+    },
+    FunctionDeclaration(funcPath: NodePath<t.FunctionDeclaration>) {
+      if (!funcPath.node.id) return;
+      const funcName = funcPath.node.id.name;
+      functionBodies.set(funcName, funcPath.node);
+      const settersCalled = findSettersCalledInFunction(funcPath.node);
+      if (settersCalled.length > 0) {
+        functionsCallingSetters.set(funcName, settersCalled);
+      }
+    },
+  });
+
+  // Second pass: build call graph between local functions
+  const knownFunctions = new Set(functionBodies.keys());
+  for (const [funcName, funcBody] of functionBodies) {
+    const calledFunctions = findFunctionsCalledInFunction(funcBody, knownFunctions);
+    if (calledFunctions.length > 0) {
+      functionCallingFunctions.set(funcName, calledFunctions);
+    }
+  }
+
+  // Third pass: transitively propagate setters through the call graph
+  // Use iterative approach to handle chains like outerFn -> innerFn -> dispatch
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [funcName, calledFunctions] of functionCallingFunctions) {
+      const currentSetters = functionsCallingSetters.get(funcName) || [];
+      const currentSettersSet = new Set(currentSetters);
+
+      for (const calledFunc of calledFunctions) {
+        const transitiveSetters = functionsCallingSetters.get(calledFunc) || [];
+        for (const setter of transitiveSetters) {
+          if (!currentSettersSet.has(setter)) {
+            currentSettersSet.add(setter);
+            changed = true;
+          }
+        }
+      }
+
+      if (currentSettersSet.size > currentSetters.length) {
+        functionsCallingSetters.set(funcName, Array.from(currentSettersSet));
+      }
+    }
+  }
+
+  return functionsCallingSetters;
+}
+
+/**
  * Detect useEffect calls without a dependency array that contain setState.
  * This is a guaranteed infinite loop pattern.
  *
@@ -311,11 +429,18 @@ const ASYNC_CALLBACK_FUNCTIONS = new Set([
  * - Deferred modifications (inside async callbacks)
  * - Function references passed to event listeners
  * - Ref mutations
+ * - Indirect modifications through local function calls
+ *
+ * @param hookBody - The hook callback body to analyze
+ * @param stateInfo - Map of state variables to their setters
+ * @param refVars - Set of ref variable names
+ * @param localFunctionSetters - Optional map of local functions to the setters they call (transitively)
  */
 export function analyzeStateInteractions(
   hookBody: t.Node,
   stateInfo: Map<string, string>,
-  refVars: Set<string> = new Set()
+  refVars: Set<string> = new Set(),
+  localFunctionSetters: Map<string, string[]> = new Map()
 ): StateInteraction {
   const interactions: StateInteraction = {
     reads: [],
@@ -326,6 +451,7 @@ export function analyzeStateInteractions(
     guardedModifications: [],
     functionReferences: [],
     refMutations: [],
+    cleanupModifications: [],
   };
 
   const setterNames = Array.from(stateInfo.values());
@@ -341,10 +467,22 @@ export function analyzeStateInteractions(
   // Track CallExpression nodes that are async callback receivers
   const asyncCallbackNodes = new Set<t.Node>();
 
-  // First pass: find all functions passed as arguments to known safe receivers
-  // AND track async callback nodes (calls to setInterval, onSnapshot, etc. with inline callbacks)
+  // Track cleanup function nodes (functions returned from the effect callback)
+  const cleanupFunctionNodes = new Set<t.Node>();
+
+  // First pass: find all functions passed as arguments to known safe receivers,
+  // track async callback nodes, and identify cleanup functions (returned from effect)
   traverse(hookBody, {
     noScope: true,
+
+    // Detect cleanup functions: return () => { ... } or return function() { ... }
+    ReturnStatement(path: NodePath<t.ReturnStatement>) {
+      const returnArg = path.node.argument;
+      if (t.isArrowFunctionExpression(returnArg) || t.isFunctionExpression(returnArg)) {
+        cleanupFunctionNodes.add(returnArg);
+      }
+    },
+
     CallExpression(path: NodePath<t.CallExpression>) {
       const node = path.node;
       let receivingFuncName: string | null = null;
@@ -399,6 +537,11 @@ export function analyzeStateInteractions(
     return path.findParent((p) => asyncCallbackNodes.has(p.node)) !== null;
   }
 
+  // Helper: check if a path is inside a cleanup function
+  function isInsideCleanupFunction(path: NodePath): boolean {
+    return path.findParent((p) => cleanupFunctionNodes.has(p.node)) !== null;
+  }
+
   // Helper: get ancestor stack as array of nodes (for analyzeConditionalGuard)
   function getAncestorStack(path: NodePath): t.Node[] {
     const ancestors: t.Node[] = [];
@@ -429,48 +572,78 @@ export function analyzeStateInteractions(
   traverse(hookBody, {
     noScope: true,
 
-    // Check for function calls (state setters)
+    // Check for function calls (state setters or local functions that call setters)
     CallExpression(path: NodePath<t.CallExpression>) {
       const node = path.node;
       if (!t.isIdentifier(node.callee)) return;
 
       const calleeName = node.callee.name;
-      if (!setterNames.includes(calleeName)) return;
 
-      const stateVar = setterToState.get(calleeName);
+      // Check if this is a direct call to a state setter
+      if (setterNames.includes(calleeName)) {
+        const stateVar = setterToState.get(calleeName);
 
-      // Check if this modification is inside an async callback (deferred)
-      if (isInsideAsyncCallback(path)) {
-        interactions.deferredModifications.push(calleeName);
-      } else {
-        // Not deferred, so analyze for loop risks
-        const guardAnalysis = analyzeConditionalGuard(
-          node,
-          getAncestorStack(path),
-          calleeName,
-          stateVar,
-          stateNames
-        );
-
-        if (guardAnalysis) {
-          interactions.guardedModifications.push(guardAnalysis);
-          if (!guardAnalysis.isSafe) {
-            interactions.conditionalModifications.push(calleeName);
-          }
-        } else {
-          // If we couldn't analyze the guard, treat as a regular modification
-          // The CFG-based analysis will determine if it's truly unconditional
-          interactions.modifications.push(calleeName);
+        // Check if this modification is inside an async callback (deferred)
+        if (isInsideAsyncCallback(path)) {
+          interactions.deferredModifications.push(calleeName);
         }
+        // Check if this modification is inside a cleanup function
+        else if (isInsideCleanupFunction(path)) {
+          interactions.cleanupModifications.push(calleeName);
+        } else {
+          // Not deferred and not in cleanup, so analyze for loop risks
+          const guardAnalysis = analyzeConditionalGuard(
+            node,
+            getAncestorStack(path),
+            calleeName,
+            stateVar,
+            stateNames
+          );
+
+          if (guardAnalysis) {
+            interactions.guardedModifications.push(guardAnalysis);
+            if (!guardAnalysis.isSafe) {
+              interactions.conditionalModifications.push(calleeName);
+            }
+          } else {
+            // If we couldn't analyze the guard, treat as a regular modification
+            // The CFG-based analysis will determine if it's truly unconditional
+            interactions.modifications.push(calleeName);
+          }
+        }
+
+        // Check if it's a functional update (applies to both deferred and non-deferred calls)
+        if (
+          node.arguments.length > 0 &&
+          (t.isArrowFunctionExpression(node.arguments[0]) ||
+            t.isFunctionExpression(node.arguments[0]))
+        ) {
+          interactions.functionalUpdates.push(calleeName);
+        }
+        return; // Already handled as direct setter call
       }
 
-      // Check if it's a functional update (applies to both deferred and non-deferred calls)
-      if (
-        node.arguments.length > 0 &&
-        (t.isArrowFunctionExpression(node.arguments[0]) ||
-          t.isFunctionExpression(node.arguments[0]))
-      ) {
-        interactions.functionalUpdates.push(calleeName);
+      // Check if this is a call to a local function that transitively calls setters
+      const transitiveSetters = localFunctionSetters.get(calleeName);
+      if (transitiveSetters && transitiveSetters.length > 0) {
+        // Check context (async, cleanup, etc.)
+        if (isInsideAsyncCallback(path)) {
+          // Indirect calls inside async callbacks are deferred
+          for (const setter of transitiveSetters) {
+            interactions.deferredModifications.push(setter);
+          }
+        } else if (isInsideCleanupFunction(path)) {
+          // Indirect calls inside cleanup functions
+          for (const setter of transitiveSetters) {
+            interactions.cleanupModifications.push(setter);
+          }
+        } else {
+          // Indirect calls in main effect body - treat as unconditional modifications
+          // since we can't easily analyze guards through function calls
+          for (const setter of transitiveSetters) {
+            interactions.modifications.push(setter);
+          }
+        }
       }
     },
 
