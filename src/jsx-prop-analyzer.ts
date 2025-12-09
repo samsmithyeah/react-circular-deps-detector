@@ -65,15 +65,15 @@ export function analyzeJsxProps(
       const elementName = getJSXElementName(jsxElement.node);
       if (!elementName) return;
 
-      // Check if this is a Context.Provider
-      const isContextProvider = elementName.endsWith('.Provider') || propName === 'value';
+      // Check if this is a Context.Provider - must be *.Provider element with value prop
+      const isContextProvider = elementName.endsWith('.Provider') && propName === 'value';
 
       unstableProps.push({
         componentName: elementName,
         propName,
         unstableVar,
         line,
-        isContextProvider: isContextProvider && propName === 'value',
+        isContextProvider,
       });
     },
   });

@@ -545,13 +545,6 @@ export function extractStateInfo(ast: t.Node): StateAndRefInfo {
  * @param typeChecker - Optional TypeScript type checker for strict mode
  * @param config - Optional stability configuration
  */
-/** Component boundary information */
-interface ComponentBoundary {
-  name: string;
-  startLine: number;
-  endLine: number;
-}
-
 export function extractUnstableVariables(
   ast: t.Node,
   filePath?: string,
@@ -565,11 +558,11 @@ export function extractUnstableVariables(
   const refVars = new Set<string>();
 
   // Track which function scopes we're in - now as a stack to handle nesting
-  const componentStack: ComponentBoundary[] = [];
+  const componentStack: ComponentBoundaryInfo[] = [];
   const moduleLevelVars = new Set<string>();
 
   // Helper to get current component info
-  const getCurrentComponent = (): ComponentBoundary | undefined => {
+  const getCurrentComponent = (): ComponentBoundaryInfo | undefined => {
     return componentStack.length > 0 ? componentStack[componentStack.length - 1] : undefined;
   };
 
