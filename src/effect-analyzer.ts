@@ -68,7 +68,8 @@ export function buildLocalFunctionSetterMap(
     return functionsCalled;
   }
 
-  // First pass: collect all function definitions and what they call directly
+  // First pass: collect all function definitions (but don't traverse them yet)
+  // We must not do nested traversals from inside traverse callbacks
   const functionBodies = new Map<string, t.Node>();
 
   traverse(ast, {
@@ -79,22 +80,23 @@ export function buildLocalFunctionSetterMap(
 
       if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
         functionBodies.set(varName, init);
-        const settersCalled = findSettersCalledInFunction(init);
-        if (settersCalled.length > 0) {
-          functionsCallingSetters.set(varName, settersCalled);
-        }
       }
     },
     FunctionDeclaration(funcPath: NodePath<t.FunctionDeclaration>) {
       if (!funcPath.node.id) return;
       const funcName = funcPath.node.id.name;
       functionBodies.set(funcName, funcPath.node);
-      const settersCalled = findSettersCalledInFunction(funcPath.node);
-      if (settersCalled.length > 0) {
-        functionsCallingSetters.set(funcName, settersCalled);
-      }
     },
   });
+
+  // Now analyze each function AFTER the main traversal is complete
+  // This avoids nested traversal issues
+  for (const [funcName, funcBody] of functionBodies) {
+    const settersCalled = findSettersCalledInFunction(funcBody);
+    if (settersCalled.length > 0) {
+      functionsCallingSetters.set(funcName, settersCalled);
+    }
+  }
 
   // Second pass: build call graph between local functions
   const knownFunctions = new Set(functionBodies.keys());
@@ -108,24 +110,28 @@ export function buildLocalFunctionSetterMap(
   // Third pass: transitively propagate setters through the call graph
   // Use iterative approach to handle chains like outerFn -> innerFn -> dispatch
   let changed = true;
-  while (changed) {
+  let iterations = 0;
+  const maxIterations = 100; // Safety limit to prevent infinite loops
+
+  while (changed && iterations < maxIterations) {
+    iterations++;
     changed = false;
     for (const [funcName, calledFunctions] of functionCallingFunctions) {
       const currentSetters = functionsCallingSetters.get(funcName) || [];
       const currentSettersSet = new Set(currentSetters);
+      const originalSize = currentSettersSet.size;
 
       for (const calledFunc of calledFunctions) {
         const transitiveSetters = functionsCallingSetters.get(calledFunc) || [];
         for (const setter of transitiveSetters) {
-          if (!currentSettersSet.has(setter)) {
-            currentSettersSet.add(setter);
-            changed = true;
-          }
+          currentSettersSet.add(setter);
         }
       }
 
-      if (currentSettersSet.size > currentSetters.length) {
+      // Only update if we actually added new unique setters
+      if (currentSettersSet.size > originalSize) {
         functionsCallingSetters.set(funcName, Array.from(currentSettersSet));
+        changed = true;
       }
     }
   }
