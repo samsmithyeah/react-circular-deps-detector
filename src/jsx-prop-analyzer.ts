@@ -117,7 +117,7 @@ export function analyzeJsxProps(
           type: 'potential-issue',
           errorCode: 'RLD-405',
           category: 'performance',
-          severity: 'low',
+          severity: 'medium',
           confidence: 'medium',
           hookType: 'jsx-prop',
           line: prop.line,
