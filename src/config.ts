@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { detectApplicablePresets, getDetectedPresetNames, mergePresets } from './presets';
 
 /**
  * Configuration schema for rcd (React Circular Dependencies detector)
@@ -68,6 +69,14 @@ export interface RcdConfig {
    * If not specified, will search upward from the target directory.
    */
   tsconfigPath?: string;
+
+  /**
+   * Disable automatic detection of library presets from package.json.
+   * When false (default), the tool will auto-detect installed libraries
+   * (e.g., React Query, Redux, Zustand) and apply their stable hook configurations.
+   * @default false
+   */
+  noPresets?: boolean;
 }
 
 const CONFIG_FILES = ['rld.config.js', 'rld.config.json', '.rldrc', '.rldrc.json'];
@@ -85,27 +94,87 @@ export const DEFAULT_CONFIG: Required<RcdConfig> = {
   customFunctions: {},
   strictMode: false,
   tsconfigPath: undefined as unknown as string,
+  noPresets: false,
 };
+
+/**
+ * Result of loading config, including detected presets info
+ */
+export interface LoadConfigResult {
+  config: Required<RcdConfig>;
+  detectedPresets: string[];
+  configPath: string | null;
+}
 
 /**
  * Load configuration from the nearest config file
  * @param startDir Directory to start searching from
+ * @param options Options for loading
  * @returns Merged configuration with defaults
  */
-export function loadConfig(startDir: string): Required<RcdConfig> {
+export function loadConfig(startDir: string, options?: { verbose?: boolean }): Required<RcdConfig> {
+  const result = loadConfigWithInfo(startDir, options);
+  return result.config;
+}
+
+/**
+ * Load configuration and return additional info about what was detected
+ * @param startDir Directory to start searching from
+ * @param options Options for loading
+ * @returns Config along with detected presets and config path info
+ */
+export function loadConfigWithInfo(
+  startDir: string,
+  options?: { verbose?: boolean; noPresets?: boolean }
+): LoadConfigResult {
   const configPath = findConfigFile(startDir);
+  let userConfig: RcdConfig = {};
 
-  if (!configPath) {
-    return DEFAULT_CONFIG;
+  if (configPath) {
+    try {
+      userConfig = loadConfigFile(configPath);
+    } catch (error) {
+      console.warn(`Warning: Could not load config from ${configPath}:`, error);
+    }
   }
 
-  try {
-    const config = loadConfigFile(configPath);
-    return mergeConfig(DEFAULT_CONFIG, config);
-  } catch (error) {
-    console.warn(`Warning: Could not load config from ${configPath}:`, error);
-    return DEFAULT_CONFIG;
+  // Check if presets are disabled (CLI flag takes precedence over config file)
+  const noPresets = options?.noPresets ?? userConfig.noPresets ?? DEFAULT_CONFIG.noPresets;
+
+  // Detect and apply presets if not disabled
+  let presetConfig: Partial<RcdConfig> = {};
+  let detectedPresets: string[] = [];
+
+  if (!noPresets) {
+    const packageJsonPath = findPackageJson(startDir);
+    if (packageJsonPath) {
+      const dependencies = readDependencies(packageJsonPath);
+      const applicablePresets = detectApplicablePresets(dependencies);
+
+      if (applicablePresets.length > 0) {
+        detectedPresets = getDetectedPresetNames(dependencies);
+        const merged = mergePresets(applicablePresets);
+        presetConfig = {
+          stableHooks: merged.stableHooks,
+          unstableHooks: merged.unstableHooks,
+          customFunctions: merged.customFunctions,
+        };
+
+        if (options?.verbose) {
+          console.log(`Auto-detected library presets: ${detectedPresets.join(', ')}`);
+        }
+      }
+    }
   }
+
+  // Merge order: defaults < presets < user config (user config wins)
+  const config = mergeConfig(mergeConfig(DEFAULT_CONFIG, presetConfig), userConfig);
+
+  return {
+    config,
+    detectedPresets,
+    configPath,
+  };
 }
 
 /**
@@ -158,9 +227,47 @@ function loadConfigFile(configPath: string): RcdConfig {
 }
 
 /**
+ * Find the nearest package.json by walking up the directory tree
+ */
+function findPackageJson(startDir: string): string | null {
+  let dir = path.resolve(startDir);
+  const root = path.parse(dir).root;
+
+  while (dir !== root) {
+    const packagePath = path.join(dir, 'package.json');
+    if (fs.existsSync(packagePath)) {
+      return packagePath;
+    }
+    dir = path.dirname(dir);
+  }
+
+  return null;
+}
+
+/**
+ * Read dependencies from a package.json file
+ * @returns Combined dependencies and devDependencies
+ */
+function readDependencies(packageJsonPath: string): Record<string, string> {
+  try {
+    const content = fs.readFileSync(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(content);
+    return {
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Merge user config with defaults
  */
-function mergeConfig(defaults: Required<RcdConfig>, userConfig: RcdConfig): Required<RcdConfig> {
+function mergeConfig(
+  defaults: Required<RcdConfig>,
+  userConfig: Partial<RcdConfig>
+): Required<RcdConfig> {
   return {
     stableHooks: [...defaults.stableHooks, ...(userConfig.stableHooks || [])],
     unstableHooks: [...defaults.unstableHooks, ...(userConfig.unstableHooks || [])],
@@ -171,6 +278,7 @@ function mergeConfig(defaults: Required<RcdConfig>, userConfig: RcdConfig): Requ
     customFunctions: { ...defaults.customFunctions, ...userConfig.customFunctions },
     strictMode: userConfig.strictMode ?? defaults.strictMode,
     tsconfigPath: userConfig.tsconfigPath ?? defaults.tsconfigPath,
+    noPresets: userConfig.noPresets ?? defaults.noPresets,
   };
 }
 

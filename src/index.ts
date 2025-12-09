@@ -89,7 +89,24 @@ export {
 } from './parser';
 
 // Configuration
-export { loadConfig, RcdConfig, DEFAULT_CONFIG, severityLevel, confidenceLevel } from './config';
+export {
+  loadConfig,
+  loadConfigWithInfo,
+  LoadConfigResult,
+  RcdConfig,
+  DEFAULT_CONFIG,
+  severityLevel,
+  confidenceLevel,
+} from './config';
+
+// Library presets
+export {
+  LIBRARY_PRESETS,
+  LibraryPreset,
+  detectApplicablePresets,
+  mergePresets,
+  getDetectedPresetNames,
+} from './presets';
 
 // Cache
 export { AstCache, CacheableParsedData } from './cache';

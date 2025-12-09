@@ -14,6 +14,7 @@ A static analysis tool to detect circular dependencies and infinite re-render ri
 - **Configurable**: Supports config files for custom hooks and ignore patterns
 - **Caching**: Optional AST caching to speed up repeated runs
 - **Zero Config**: Works out of the box with sensible defaults
+- **Library Presets**: Auto-detects popular libraries (React Query, Redux, Zustand, etc.) and applies their stable hook configurations
 
 ## Installation
 
@@ -217,6 +218,45 @@ Create a config file in your project root. Supported formats:
 | `minSeverity` | `"high" \| "medium" \| "low"` | `"low"` | Minimum severity to report |
 | `minConfidence` | `"high" \| "medium" \| "low"` | `"low"` | Minimum confidence to report |
 | `includePotentialIssues` | `boolean` | `true` | Include potential issues |
+| `noPresets` | `boolean` | `false` | Disable auto-detection of library presets |
+
+### Library Presets (Auto-Detection)
+
+React Loop Detector automatically detects popular React libraries from your `package.json` and applies their stable hook configurations. This means you get accurate analysis out of the box without manual configuration.
+
+**Supported Libraries:**
+
+| Library | Package(s) | Example Stable Hooks |
+|---------|------------|---------------------|
+| **TanStack Query** | `@tanstack/react-query`, `react-query` | `useQuery`, `useMutation`, `useQueryClient` |
+| **SWR** | `swr` | `useSWR`, `useSWRMutation` |
+| **Apollo Client** | `@apollo/client` | `useQuery`, `useMutation`, `useApolloClient` |
+| **Redux** | `react-redux`, `@reduxjs/toolkit` | `useSelector`, `useDispatch`, `useStore` |
+| **Zustand** | `zustand` | `useStore`, `useShallow` |
+| **Jotai** | `jotai` | `useAtom`, `useAtomValue`, `useSetAtom` |
+| **React Hook Form** | `react-hook-form` | `useForm`, `useController`, `useWatch` |
+| **React Router** | `react-router-dom` | `useNavigate`, `useParams`, `useLocation` |
+| **react-i18next** | `react-i18next` | `useTranslation` |
+| **Framer Motion** | `framer-motion` | `useAnimation`, `useMotionValue` |
+
+And many more! See the full list in `src/presets.ts`.
+
+**Disabling Presets:**
+
+If you prefer to configure everything manually:
+
+```json
+{
+  "noPresets": true,
+  "stableHooks": ["useQuery", "useSelector"]
+}
+```
+
+Or via CLI:
+
+```bash
+rld ./src --no-presets
+```
 
 ## CLI Options
 
@@ -235,6 +275,7 @@ Create a config file in your project root. Supported formats:
 | `--min-confidence <level>` | Minimum confidence: `high`, `medium`, `low` |
 | `--confirmed-only` | Only report confirmed infinite loops |
 | `--cache` | Enable AST caching for faster runs. Disables parallel processing. |
+| `--no-presets` | Disable auto-detection of library presets from package.json |
 
 ### Commands
 
