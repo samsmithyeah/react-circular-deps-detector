@@ -1,7 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { HookInfo, ImportInfo, ExportInfo } from './parser';
+import { HookInfo, ExportInfo } from './parser';
+
+/**
+ * Serializable import info for caching (ImportInfo has a Map which isn't JSON-serializable)
+ */
+export interface CacheableImportInfo {
+  source: string;
+  imports: string[];
+  /** importedNames as array of [localName, importedName] tuples */
+  importedNames: [string, string][];
+  isDefaultImport: boolean;
+  isNamespaceImport: boolean;
+  line: number;
+}
 
 /**
  * Serializable subset of ParsedFile for caching
@@ -9,10 +22,11 @@ import { HookInfo, ImportInfo, ExportInfo } from './parser';
  */
 export interface CacheableParsedData {
   hooks: HookInfo[];
-  imports: ImportInfo[];
+  imports: CacheableImportInfo[];
   exports: ExportInfo[];
   functions: string[];
   contexts: string[];
+  localMemoizedComponents: string[];
   /** Variables stored as array of [key, values[]] tuples for JSON serialization */
   variables: [string, string[]][];
 }

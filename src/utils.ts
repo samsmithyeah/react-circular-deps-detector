@@ -191,3 +191,28 @@ export function conditionInvolvesState(
 
   return found;
 }
+
+/**
+ * Check if a node is a memo() or React.memo() call expression.
+ * This is used to detect memoized components for:
+ * - Export detection in parser.ts
+ * - Local component detection in jsx-prop-analyzer.ts
+ *
+ * Patterns detected:
+ * - memo(Component)
+ * - React.memo(Component)
+ * - memo(() => ...)
+ * - React.memo(function Component() { ... })
+ */
+export function isMemoCallExpression(node: t.Node | null | undefined): boolean {
+  if (!node || !t.isCallExpression(node)) return false;
+  const callee = node.callee;
+  return (
+    (t.isIdentifier(callee) && callee.name === 'memo') ||
+    (t.isMemberExpression(callee) &&
+      t.isIdentifier(callee.object) &&
+      callee.object.name === 'React' &&
+      t.isIdentifier(callee.property) &&
+      callee.property.name === 'memo')
+  );
+}

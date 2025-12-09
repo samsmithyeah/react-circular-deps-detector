@@ -3,6 +3,7 @@ import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import * as fs from 'fs';
 import { AstCache, CacheableParsedData } from './cache';
+import { isMemoCallExpression } from './utils';
 
 export interface HookInfo {
   name: string;
@@ -14,7 +15,10 @@ export interface HookInfo {
 
 export interface ImportInfo {
   source: string;
+  /** Local names used in this file (e.g., "MyButton" from `import { Button as MyButton }`) */
   imports: string[];
+  /** Mapping from local name to original imported name (e.g., "MyButton" -> "Button") */
+  importedNames: Map<string, string>;
   isDefaultImport: boolean;
   isNamespaceImport: boolean;
   line: number;
@@ -24,6 +28,8 @@ export interface ExportInfo {
   name: string;
   isDefault: boolean;
   line: number;
+  /** True if the export is wrapped with React.memo() or memo() */
+  isMemoized?: boolean;
 }
 
 export interface ParsedFile {
@@ -34,6 +40,8 @@ export interface ParsedFile {
   exports: ExportInfo[];
   functions: Set<string>;
   contexts: Set<string>;
+  /** Components wrapped with memo() or React.memo() defined in this file */
+  localMemoizedComponents: Set<string>;
   ast: t.File; // Store the parsed AST to avoid re-parsing
   content: string; // Store file content for comment analysis
 }
@@ -59,6 +67,8 @@ export function parseFile(filePath: string): ParsedFile {
   const exports: ExportInfo[] = [];
   const functions = new Set<string>();
   const contexts = new Set<string>();
+  // Track components wrapped with memo() or React.memo()
+  const memoizedComponents = new Set<string>();
 
   traverse(ast, {
     ImportDeclaration(path: NodePath<t.ImportDeclaration>) {
@@ -69,12 +79,12 @@ export function parseFile(filePath: string): ParsedFile {
     },
 
     ExportNamedDeclaration(path: NodePath<t.ExportNamedDeclaration>) {
-      const exportInfos = extractNamedExports(path);
+      const exportInfos = extractNamedExports(path, memoizedComponents);
       exports.push(...exportInfos);
     },
 
     ExportDefaultDeclaration(path: NodePath<t.ExportDefaultDeclaration>) {
-      const exportInfo = extractDefaultExport(path);
+      const exportInfo = extractDefaultExport(path, memoizedComponents);
       if (exportInfo) {
         exports.push(exportInfo);
       }
@@ -103,6 +113,14 @@ export function parseFile(filePath: string): ParsedFile {
           contexts.add(parent.id.name);
         }
       }
+
+      // Detect memo() and React.memo() calls
+      if (isMemoCallExpression(path.node)) {
+        const parent = path.parent;
+        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+          memoizedComponents.add(parent.id.name);
+        }
+      }
     },
 
     VariableDeclarator(path: NodePath<t.VariableDeclarator>) {
@@ -129,7 +147,18 @@ export function parseFile(filePath: string): ParsedFile {
     },
   });
 
-  return { file: filePath, hooks, variables, imports, exports, functions, contexts, ast, content };
+  return {
+    file: filePath,
+    hooks,
+    variables,
+    imports,
+    exports,
+    functions,
+    contexts,
+    localMemoizedComponents: memoizedComponents,
+    ast,
+    content,
+  };
 }
 
 /**
@@ -156,14 +185,25 @@ export function parseFileWithCache(filePath: string, cache?: AstCache): ParsedFi
         variables.set(key, new Set(values));
       }
 
+      // Convert cached imports back to ImportInfo[] with Map for importedNames
+      const imports: ImportInfo[] = cached.imports.map((imp) => ({
+        source: imp.source,
+        imports: imp.imports,
+        importedNames: new Map(imp.importedNames),
+        isDefaultImport: imp.isDefaultImport,
+        isNamespaceImport: imp.isNamespaceImport,
+        line: imp.line,
+      }));
+
       return {
         file: filePath,
         hooks: cached.hooks,
         variables,
-        imports: cached.imports,
+        imports,
         exports: cached.exports,
         functions: new Set(cached.functions),
         contexts: new Set(cached.contexts),
+        localMemoizedComponents: new Set(cached.localMemoizedComponents),
         ast,
         content,
       };
@@ -177,10 +217,18 @@ export function parseFileWithCache(filePath: string, cache?: AstCache): ParsedFi
   if (cache) {
     const cacheableData: CacheableParsedData = {
       hooks: result.hooks,
-      imports: result.imports,
+      imports: result.imports.map((imp) => ({
+        source: imp.source,
+        imports: imp.imports,
+        importedNames: Array.from(imp.importedNames.entries()),
+        isDefaultImport: imp.isDefaultImport,
+        isNamespaceImport: imp.isNamespaceImport,
+        line: imp.line,
+      })),
       exports: result.exports,
       functions: Array.from(result.functions),
       contexts: Array.from(result.contexts),
+      localMemoizedComponents: Array.from(result.localMemoizedComponents),
       variables: Array.from(result.variables.entries()).map(([k, v]) => [k, Array.from(v)]),
     };
     cache.set(filePath, cacheableData);
@@ -284,31 +332,45 @@ function extractImportInfo(path: NodePath<t.ImportDeclaration>): ImportInfo | nu
   }
 
   const imports: string[] = [];
+  const importedNames = new Map<string, string>();
   let isDefaultImport = false;
   let isNamespaceImport = false;
 
   path.node.specifiers.forEach((spec) => {
     if (t.isImportDefaultSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      imports.push(localName);
+      importedNames.set(localName, 'default');
       isDefaultImport = true;
     } else if (t.isImportNamespaceSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      imports.push(localName);
+      // For namespace imports, all exports are accessible via this name
+      importedNames.set(localName, '*');
       isNamespaceImport = true;
     } else if (t.isImportSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      // Get the original imported name (handles aliased imports like `import { Button as MyButton }`)
+      const importedName = t.isIdentifier(spec.imported) ? spec.imported.name : spec.imported.value;
+      imports.push(localName);
+      importedNames.set(localName, importedName);
     }
   });
 
   return {
     source,
     imports,
+    importedNames,
     isDefaultImport,
     isNamespaceImport,
     line,
   };
 }
 
-function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportInfo[] {
+function extractNamedExports(
+  path: NodePath<t.ExportNamedDeclaration>,
+  memoizedComponents: Set<string>
+): ExportInfo[] {
   const exports: ExportInfo[] = [];
   const loc = path.node.loc;
   const line = loc?.start.line || 0;
@@ -319,10 +381,15 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     if (t.isVariableDeclaration(path.node.declaration)) {
       path.node.declaration.declarations.forEach((decl) => {
         if (t.isIdentifier(decl.id)) {
+          const name = decl.id.name;
+          // Check if this export is a memo-wrapped component
+          // Also check if the initializer is a memo() call directly
+          const isMemoized = memoizedComponents.has(name) || isMemoCallExpression(decl.init);
           exports.push({
-            name: decl.id.name,
+            name,
             isDefault: false,
             line,
+            isMemoized: isMemoized || undefined,
           });
         }
       });
@@ -337,10 +404,14 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     // export { foo, bar }
     path.node.specifiers.forEach((spec) => {
       if (t.isExportSpecifier(spec)) {
+        const localName = spec.local.name;
+        const exportedName =
+          spec.exported.type === 'Identifier' ? spec.exported.name : spec.exported.value;
         exports.push({
-          name: spec.exported.type === 'Identifier' ? spec.exported.name : spec.exported.value,
+          name: exportedName,
           isDefault: false,
           line,
+          isMemoized: memoizedComponents.has(localName) || undefined,
         });
       }
     });
@@ -349,21 +420,38 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
   return exports;
 }
 
-function extractDefaultExport(path: NodePath<t.ExportDefaultDeclaration>): ExportInfo | null {
+function extractDefaultExport(
+  path: NodePath<t.ExportDefaultDeclaration>,
+  memoizedComponents: Set<string>
+): ExportInfo | null {
   const loc = path.node.loc;
   const line = loc?.start.line || 0;
 
   let name = 'default';
+  let isMemoized = false;
 
   if (t.isFunctionDeclaration(path.node.declaration) && path.node.declaration.id) {
     name = path.node.declaration.id.name;
   } else if (t.isIdentifier(path.node.declaration)) {
     name = path.node.declaration.name;
+    // Check if the exported identifier is a memoized component
+    isMemoized = memoizedComponents.has(name);
+  } else if (isMemoCallExpression(path.node.declaration)) {
+    // export default memo(Component) - directly exported memo call
+    isMemoized = true;
+    // Try to extract name from memo argument
+    const memoArg = (path.node.declaration as t.CallExpression).arguments[0];
+    if (t.isIdentifier(memoArg)) {
+      name = memoArg.name;
+    } else if (t.isFunctionExpression(memoArg) && memoArg.id) {
+      name = memoArg.id.name;
+    }
   }
 
   return {
     name,
     isDefault: true,
     line,
+    isMemoized: isMemoized || undefined,
   };
 }

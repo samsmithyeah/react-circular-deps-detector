@@ -140,7 +140,7 @@ export function analyzeHooks(
 
   for (const file of parsedFiles) {
     try {
-      const fileResults = analyzeFileIntelligently(file, crossFileAnalysis, options);
+      const fileResults = analyzeFileIntelligently(file, crossFileAnalysis, options, allFiles);
       results.push(...fileResults);
     } catch (error) {
       console.warn(`Could not analyze hooks intelligently in ${file.file}:`, error);
@@ -162,7 +162,8 @@ export function analyzeHooks(
 function analyzeFileIntelligently(
   file: ParsedFile,
   crossFileAnalysis: CrossFileAnalysis,
-  options: AnalyzerOptions
+  options: AnalyzerOptions,
+  allParsedFiles: ParsedFile[]
 ): HookAnalysis[] {
   const results: HookAnalysis[] = [];
 
@@ -191,7 +192,15 @@ function analyzeFileIntelligently(
     results.push(...noDepsIssues);
 
     // Check for unstable props passed to JSX elements (including Context.Provider)
-    const jsxPropIssues = analyzeJsxProps(ast, unstableVars, file.file);
+    // Pass localMemoizedComponents, imports and all parsed files for cross-file memoization detection
+    const jsxPropIssues = analyzeJsxProps(
+      ast,
+      unstableVars,
+      file.file,
+      file.localMemoizedComponents,
+      file.imports,
+      allParsedFiles
+    );
     results.push(...jsxPropIssues);
 
     // Build map of local functions to the setters they call (for indirect modification detection)
