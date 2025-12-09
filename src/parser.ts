@@ -24,6 +24,8 @@ export interface ExportInfo {
   name: string;
   isDefault: boolean;
   line: number;
+  /** True if the export is wrapped with React.memo() or memo() */
+  isMemoized?: boolean;
 }
 
 export interface ParsedFile {
@@ -59,6 +61,8 @@ export function parseFile(filePath: string): ParsedFile {
   const exports: ExportInfo[] = [];
   const functions = new Set<string>();
   const contexts = new Set<string>();
+  // Track components wrapped with memo() or React.memo()
+  const memoizedComponents = new Set<string>();
 
   traverse(ast, {
     ImportDeclaration(path: NodePath<t.ImportDeclaration>) {
@@ -69,12 +73,12 @@ export function parseFile(filePath: string): ParsedFile {
     },
 
     ExportNamedDeclaration(path: NodePath<t.ExportNamedDeclaration>) {
-      const exportInfos = extractNamedExports(path);
+      const exportInfos = extractNamedExports(path, memoizedComponents);
       exports.push(...exportInfos);
     },
 
     ExportDefaultDeclaration(path: NodePath<t.ExportDefaultDeclaration>) {
-      const exportInfo = extractDefaultExport(path);
+      const exportInfo = extractDefaultExport(path, memoizedComponents);
       if (exportInfo) {
         exports.push(exportInfo);
       }
@@ -101,6 +105,22 @@ export function parseFile(filePath: string): ParsedFile {
         const parent = path.parent;
         if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           contexts.add(parent.id.name);
+        }
+      }
+
+      // Detect memo() and React.memo() calls
+      const isMemoCall =
+        (t.isIdentifier(callee) && callee.name === 'memo') ||
+        (t.isMemberExpression(callee) &&
+          t.isIdentifier(callee.object) &&
+          callee.object.name === 'React' &&
+          t.isIdentifier(callee.property) &&
+          callee.property.name === 'memo');
+
+      if (isMemoCall) {
+        const parent = path.parent;
+        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+          memoizedComponents.add(parent.id.name);
         }
       }
     },
@@ -308,7 +328,10 @@ function extractImportInfo(path: NodePath<t.ImportDeclaration>): ImportInfo | nu
   };
 }
 
-function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportInfo[] {
+function extractNamedExports(
+  path: NodePath<t.ExportNamedDeclaration>,
+  memoizedComponents: Set<string>
+): ExportInfo[] {
   const exports: ExportInfo[] = [];
   const loc = path.node.loc;
   const line = loc?.start.line || 0;
@@ -319,10 +342,15 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     if (t.isVariableDeclaration(path.node.declaration)) {
       path.node.declaration.declarations.forEach((decl) => {
         if (t.isIdentifier(decl.id)) {
+          const name = decl.id.name;
+          // Check if this export is a memo-wrapped component
+          // Also check if the initializer is a memo() call directly
+          const isMemoized = memoizedComponents.has(name) || isMemoCallExpression(decl.init);
           exports.push({
-            name: decl.id.name,
+            name,
             isDefault: false,
             line,
+            isMemoized: isMemoized || undefined,
           });
         }
       });
@@ -337,10 +365,14 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
     // export { foo, bar }
     path.node.specifiers.forEach((spec) => {
       if (t.isExportSpecifier(spec)) {
+        const localName = spec.local.name;
+        const exportedName =
+          spec.exported.type === 'Identifier' ? spec.exported.name : spec.exported.value;
         exports.push({
-          name: spec.exported.type === 'Identifier' ? spec.exported.name : spec.exported.value,
+          name: exportedName,
           isDefault: false,
           line,
+          isMemoized: memoizedComponents.has(localName) || undefined,
         });
       }
     });
@@ -349,21 +381,54 @@ function extractNamedExports(path: NodePath<t.ExportNamedDeclaration>): ExportIn
   return exports;
 }
 
-function extractDefaultExport(path: NodePath<t.ExportDefaultDeclaration>): ExportInfo | null {
+/**
+ * Check if a node is a memo() or React.memo() call expression
+ */
+function isMemoCallExpression(node: t.Node | null | undefined): boolean {
+  if (!node || !t.isCallExpression(node)) return false;
+  const callee = node.callee;
+  return (
+    (t.isIdentifier(callee) && callee.name === 'memo') ||
+    (t.isMemberExpression(callee) &&
+      t.isIdentifier(callee.object) &&
+      callee.object.name === 'React' &&
+      t.isIdentifier(callee.property) &&
+      callee.property.name === 'memo')
+  );
+}
+
+function extractDefaultExport(
+  path: NodePath<t.ExportDefaultDeclaration>,
+  memoizedComponents: Set<string>
+): ExportInfo | null {
   const loc = path.node.loc;
   const line = loc?.start.line || 0;
 
   let name = 'default';
+  let isMemoized = false;
 
   if (t.isFunctionDeclaration(path.node.declaration) && path.node.declaration.id) {
     name = path.node.declaration.id.name;
   } else if (t.isIdentifier(path.node.declaration)) {
     name = path.node.declaration.name;
+    // Check if the exported identifier is a memoized component
+    isMemoized = memoizedComponents.has(name);
+  } else if (isMemoCallExpression(path.node.declaration)) {
+    // export default memo(Component) - directly exported memo call
+    isMemoized = true;
+    // Try to extract name from memo argument
+    const memoArg = (path.node.declaration as t.CallExpression).arguments[0];
+    if (t.isIdentifier(memoArg)) {
+      name = memoArg.name;
+    } else if (t.isFunctionExpression(memoArg) && memoArg.id) {
+      name = memoArg.id.name;
+    }
   }
 
   return {
     name,
     isDefault: true,
     line,
+    isMemoized: isMemoized || undefined,
   };
 }

@@ -6,6 +6,10 @@
  * - Unstable objects/arrays are passed to memoized children (breaking memo)
  * - Unstable functions are passed as callbacks (causing unnecessary re-renders)
  * - Context.Provider receives unstable value props
+ *
+ * To reduce false positives, this analyzer now only reports warnings when
+ * the receiving component is memoized (wrapped with React.memo). Passing
+ * unstable props to non-memoized components has no performance impact.
  */
 
 import * as t from '@babel/types';
@@ -13,6 +17,7 @@ import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis } from './types';
 import { UnstableVariable } from './state-extractor';
 import { createAnalysis } from './utils';
+import { ImportInfo, ParsedFile } from './parser';
 
 /** Information about a JSX prop with an unstable value */
 interface UnstableJsxProp {
@@ -24,18 +29,128 @@ interface UnstableJsxProp {
 }
 
 /**
+ * Find local components that are wrapped with memo() or React.memo()
+ * within the same file.
+ */
+function findLocalMemoizedComponents(ast: t.Node): Set<string> {
+  const memoizedComponents = new Set<string>();
+
+  traverse(ast, {
+    noScope: true,
+    CallExpression(path: NodePath<t.CallExpression>) {
+      const callee = path.node.callee;
+      const isMemoCall =
+        (t.isIdentifier(callee) && callee.name === 'memo') ||
+        (t.isMemberExpression(callee) &&
+          t.isIdentifier(callee.object) &&
+          callee.object.name === 'React' &&
+          t.isIdentifier(callee.property) &&
+          callee.property.name === 'memo');
+
+      if (isMemoCall) {
+        const parent = path.parent;
+        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
+          memoizedComponents.add(parent.id.name);
+        }
+      }
+    },
+  });
+
+  return memoizedComponents;
+}
+
+/**
+ * Check if a component is memoized, either locally or from an imported file.
+ *
+ * @param componentName - The name of the component (e.g., "MyButton")
+ * @param localMemoized - Set of locally memoized component names
+ * @param imports - Import declarations from the current file
+ * @param allParsedFiles - All parsed files in the project
+ * @param currentFilePath - Path of the current file being analyzed
+ * @returns true if the component is known to be memoized, false otherwise
+ */
+function isComponentMemoized(
+  componentName: string,
+  localMemoized: Set<string>,
+  imports?: ImportInfo[],
+  allParsedFiles?: ParsedFile[],
+  currentFilePath?: string
+): boolean {
+  // Check if it's a local memoized component
+  if (localMemoized.has(componentName)) {
+    return true;
+  }
+
+  // If we don't have import info, we can't check cross-file
+  if (!imports || !allParsedFiles || !currentFilePath) {
+    return false;
+  }
+
+  // Find which import this component comes from
+  for (const imp of imports) {
+    if (!imp.imports.includes(componentName)) continue;
+
+    // Resolve the import path to find the source file
+    // Import source is relative (e.g., "./Button" or "../components/Button")
+    const sourceFile = allParsedFiles.find((f) => {
+      // Normalize paths for comparison
+      // The import source might be "./Button" and file might be "/path/to/Button.tsx"
+      const normalizedSource = imp.source.replace(/^\.\//, '').replace(/\.\.\//g, '');
+      const normalizedFile = f.file;
+
+      // Check if the file path ends with the import source (with various extensions)
+      const extensions = ['', '.ts', '.tsx', '.js', '.jsx'];
+      for (const ext of extensions) {
+        if (
+          normalizedFile.endsWith(`/${normalizedSource}${ext}`) ||
+          normalizedFile.endsWith(`/${normalizedSource}/index${ext}`)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (!sourceFile) continue;
+
+    // Check if the component is exported as memoized from that file
+    for (const exp of sourceFile.exports) {
+      // Match by name - for default imports, check if it's the default export
+      const isMatch = (imp.isDefaultImport && exp.isDefault) || exp.name === componentName;
+
+      if (isMatch && exp.isMemoized) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Find unstable variables being passed as JSX props.
  * Returns issues for patterns like:
- * - <Component prop={unstableObject} />
+ * - <Component prop={unstableObject} /> (only if Component is memoized)
  * - <Context.Provider value={unstableObject}>
+ *
+ * @param ast - The AST to analyze
+ * @param unstableVars - Map of unstable variables in the file
+ * @param filePath - Path of the current file
+ * @param imports - Import declarations (optional, for cross-file memoization detection)
+ * @param allParsedFiles - All parsed files (optional, for cross-file memoization detection)
  */
 export function analyzeJsxProps(
   ast: t.Node,
   unstableVars: Map<string, UnstableVariable>,
-  filePath: string
+  filePath: string,
+  imports?: ImportInfo[],
+  allParsedFiles?: ParsedFile[]
 ): HookAnalysis[] {
   const results: HookAnalysis[] = [];
   const unstableProps: UnstableJsxProp[] = [];
+
+  // Find locally memoized components
+  const localMemoizedComponents = findLocalMemoizedComponents(ast);
 
   traverse(ast, {
     JSXAttribute(nodePath: NodePath<t.JSXAttribute>) {
@@ -89,6 +204,7 @@ export function analyzeJsxProps(
 
     if (prop.isContextProvider) {
       // Context provider with unstable value - this causes all consumers to re-render
+      // Always report this since it affects all context consumers
       results.push(
         createAnalysis({
           type: 'potential-issue',
@@ -111,14 +227,29 @@ export function analyzeJsxProps(
         })
       );
     } else {
-      // Regular unstable prop - warn about potential memoization issues
+      // For regular components, only report if the component is memoized
+      // Passing unstable props to non-memoized components has no performance impact
+      const componentIsMemoized = isComponentMemoized(
+        prop.componentName,
+        localMemoizedComponents,
+        imports,
+        allParsedFiles,
+        filePath
+      );
+
+      // Skip warning if component is not memoized (no performance impact)
+      if (!componentIsMemoized) {
+        continue;
+      }
+
+      // Component is memoized - this is a real performance issue
       results.push(
         createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-405',
           category: 'performance',
           severity: 'medium',
-          confidence: 'medium',
+          confidence: 'high', // High confidence since we know the component is memoized
           hookType: 'jsx-prop',
           line: prop.line,
           file: filePath,
@@ -128,9 +259,9 @@ export function analyzeJsxProps(
           actualStateModifications: [],
           stateReads: [],
           explanation:
-            `Unstable ${typeDescriptions[prop.unstableVar.type]} '${prop.unstableVar.name}' is passed as prop '${prop.propName}' to '${prop.componentName}'. ` +
-            `This creates a new reference on every render, which can cause unnecessary re-renders if the child component uses this prop in a useEffect dependency array or is memoized. ` +
-            `Consider using useMemo/useCallback if the child depends on referential equality.`,
+            `Unstable ${typeDescriptions[prop.unstableVar.type]} '${prop.unstableVar.name}' is passed as prop '${prop.propName}' to memoized component '${prop.componentName}'. ` +
+            `This creates a new reference on every render, defeating the purpose of React.memo() and causing unnecessary re-renders. ` +
+            `Fix: wrap '${prop.unstableVar.name}' with ${prop.unstableVar.type === 'function' ? 'useCallback' : 'useMemo'}.`,
         })
       );
     }
