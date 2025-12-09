@@ -204,14 +204,14 @@ describe('Gemini Feedback: Implemented Fixes', () => {
   });
 
   describe('4. Ignore Comments Support', () => {
-    it('should ignore hooks with rcd-ignore comment on same line', () => {
+    it('should ignore hooks with rld-ignore comment on same line', () => {
       const parsed = createTestFile(`
         import React, { useState, useEffect } from 'react';
 
         export function Component() {
           const [count, setCount] = useState(0);
 
-          useEffect(() => { // rcd-ignore
+          useEffect(() => { // rld-ignore
             setCount(count + 1);
           }, [count]);
 
@@ -225,14 +225,14 @@ describe('Gemini Feedback: Implemented Fixes', () => {
       expect(infiniteLoops).toHaveLength(0);
     });
 
-    it('should ignore hooks with rcd-ignore-next-line comment', () => {
+    it('should ignore hooks with rld-ignore-next-line comment', () => {
       const parsed = createTestFile(`
         import React, { useState, useEffect } from 'react';
 
         export function Component() {
           const [count, setCount] = useState(0);
 
-          // rcd-ignore-next-line
+          // rld-ignore-next-line
           useEffect(() => {
             setCount(count + 1);
           }, [count]);

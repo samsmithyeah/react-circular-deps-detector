@@ -84,7 +84,7 @@ export function analyzeHookNode(
 ): HookAnalysis | null {
   const { node, hookName, line } = hookNode;
 
-  // Check for ignore comments: // rcd-ignore or // rcd-ignore-next-line
+  // Check for ignore comments: // rld-ignore or // rld-ignore-next-line
   if (fileContent && isHookIgnored(fileContent, line)) {
     return null; // Skip this hook - user has explicitly ignored it
   }

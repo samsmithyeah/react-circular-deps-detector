@@ -29,9 +29,9 @@ export function setCurrentOptions(options: AnalyzerOptions): void {
 /**
  * Check if a hook at the given line should be ignored based on comments.
  * Supports:
- * - // rcd-ignore (on same line)
- * - // rcd-ignore-next-line (on previous line)
- * - Block comments with rcd-ignore (inline or on same line)
+ * - // rld-ignore (on same line)
+ * - // rld-ignore-next-line (on previous line)
+ * - Block comments with rld-ignore (inline or on same line)
  */
 export function isHookIgnored(fileContent: string, hookLine: number): boolean {
   const lines = fileContent.split('\n');
@@ -39,17 +39,17 @@ export function isHookIgnored(fileContent: string, hookLine: number): boolean {
   // Check the hook's line for inline ignore comment
   if (hookLine > 0 && hookLine <= lines.length) {
     const currentLine = lines[hookLine - 1];
-    if (/\/\/\s*rcd-ignore\b/.test(currentLine) || /\/\*\s*rcd-ignore\s*\*\//.test(currentLine)) {
+    if (/\/\/\s*rld-ignore\b/.test(currentLine) || /\/\*\s*rld-ignore\s*\*\//.test(currentLine)) {
       return true;
     }
   }
 
-  // Check the previous line for rcd-ignore-next-line
+  // Check the previous line for rld-ignore-next-line
   if (hookLine > 1 && hookLine <= lines.length) {
     const previousLine = lines[hookLine - 2];
     if (
-      /\/\/\s*rcd-ignore-next-line\b/.test(previousLine) ||
-      /\/\*\s*rcd-ignore-next-line\s*\*\//.test(previousLine)
+      /\/\/\s*rld-ignore-next-line\b/.test(previousLine) ||
+      /\/\*\s*rld-ignore-next-line\s*\*\//.test(previousLine)
     ) {
       return true;
     }

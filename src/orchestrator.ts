@@ -38,6 +38,7 @@ import { detectUseEffectWithoutDeps, buildLocalFunctionSetterMap } from './effec
 import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
 import { analyzeJsxProps } from './jsx-prop-analyzer';
+import { detectUnstableSyncExternalStore } from './sync-external-store-detector';
 import { setCurrentOptions } from './utils';
 
 // Re-export types for backward compatibility
@@ -202,6 +203,15 @@ function analyzeFileIntelligently(
       allParsedFiles
     );
     results.push(...jsxPropIssues);
+
+    // Check for unstable getSnapshot in useSyncExternalStore calls
+    const syncExternalStoreIssues = detectUnstableSyncExternalStore(
+      ast,
+      unstableVars,
+      file.file,
+      file.content
+    );
+    results.push(...syncExternalStoreIssues);
 
     // Build map of local functions to the setters they call (for indirect modification detection)
     const localFunctionSetters = buildLocalFunctionSetterMap(ast, stateInfo);
