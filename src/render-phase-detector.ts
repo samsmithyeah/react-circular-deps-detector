@@ -20,8 +20,8 @@
 
 import * as t from '@babel/types';
 import traverse, { NodePath } from '@babel/traverse';
-import { HookAnalysis, ErrorCode, IssueCategory, DebugInfo } from './types';
-import { isHookIgnored } from './utils';
+import { HookAnalysis } from './types';
+import { isHookIgnored, createAnalysis } from './utils';
 
 /**
  * Detect setState calls during render phase (outside hooks, event handlers, callbacks).
@@ -31,12 +31,10 @@ export function detectSetStateDuringRender(
   ast: t.Node,
   stateInfo: Map<string, string>,
   filePath: string,
-  fileContent?: string,
-  createAnalysisFn?: typeof createAnalysis
+  fileContent?: string
 ): HookAnalysis[] {
   const results: HookAnalysis[] = [];
   const setterNames = new Set(stateInfo.values());
-  const createFn = createAnalysisFn || createAnalysis;
 
   // Build reverse map: setter -> state variable
   const setterToState = new Map<string, string>();
@@ -54,8 +52,7 @@ export function detectSetStateDuringRender(
         setterToState,
         filePath,
         fileContent,
-        results,
-        createFn
+        results
       );
     },
 
@@ -78,8 +75,7 @@ export function detectSetStateDuringRender(
         setterToState,
         filePath,
         fileContent,
-        results,
-        createFn
+        results
       );
     },
   });
@@ -96,8 +92,7 @@ function checkComponentBodyForSetState(
   setterToState: Map<string, string>,
   filePath: string,
   fileContent: string | undefined,
-  results: HookAnalysis[],
-  createAnalysisFn: typeof createAnalysis
+  results: HookAnalysis[]
 ): void {
   const body = funcPath.node.body;
   if (!t.isBlockStatement(body)) return; // Arrow function with expression body
@@ -125,7 +120,7 @@ function checkComponentBodyForSetState(
       const stateVar = setterToState.get(calleeName) || calleeName;
 
       results.push(
-        createAnalysisFn({
+        createAnalysis({
           type: 'confirmed-infinite-loop',
           errorCode: 'RLD-100',
           category: 'critical',
@@ -202,46 +197,4 @@ export function isInsideSafeContext(callPath: NodePath<t.CallExpression>): boole
   }
 
   return false;
-}
-
-/**
- * Create an analysis result object
- */
-function createAnalysis(params: {
-  type: HookAnalysis['type'];
-  errorCode: ErrorCode;
-  category: IssueCategory;
-  severity: HookAnalysis['severity'];
-  confidence: HookAnalysis['confidence'];
-  hookType: string;
-  line: number;
-  column?: number;
-  file: string;
-  problematicDependency: string;
-  stateVariable?: string;
-  setterFunction?: string;
-  actualStateModifications: string[];
-  stateReads: string[];
-  explanation: string;
-  debugInfo?: DebugInfo;
-}): HookAnalysis {
-  return {
-    type: params.type,
-    errorCode: params.errorCode,
-    category: params.category,
-    description: `${params.hookType} ${params.type.replace(/-/g, ' ')}`,
-    file: params.file,
-    line: params.line,
-    column: params.column,
-    hookType: params.hookType,
-    problematicDependency: params.problematicDependency,
-    stateVariable: params.stateVariable,
-    setterFunction: params.setterFunction,
-    severity: params.severity,
-    confidence: params.confidence,
-    explanation: params.explanation,
-    actualStateModifications: params.actualStateModifications,
-    stateReads: params.stateReads,
-    debugInfo: params.debugInfo,
-  };
 }

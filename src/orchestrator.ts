@@ -37,7 +37,7 @@ import { detectSetStateDuringRender } from './render-phase-detector';
 import { detectUseEffectWithoutDeps } from './effect-analyzer';
 import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
-import { setCurrentOptions, createAnalysis } from './utils';
+import { setCurrentOptions } from './utils';
 
 // Re-export types for backward compatibility
 export type { HookAnalysis, AnalyzerOptions, ErrorCode, IssueCategory, DebugInfo } from './types';
@@ -182,13 +182,7 @@ function analyzeFileIntelligently(
     const unstableVars = extractUnstableVariables(ast, file.file, typeChecker, stabilityConfig);
 
     // Check for setState during render (outside hooks/event handlers)
-    const renderStateIssues = detectSetStateDuringRender(
-      ast,
-      stateInfo,
-      file.file,
-      file.content,
-      createAnalysis
-    );
+    const renderStateIssues = detectSetStateDuringRender(ast, stateInfo, file.file, file.content);
     results.push(...renderStateIssues);
 
     // Check for useEffect without dependency array
@@ -256,7 +250,12 @@ function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
           allFilesMap.set(resolvedPath, newParsedFile);
           queue.push(newParsedFile); // Process imports of the new file
         } catch {
-          // Silently skip files that can't be parsed
+          // Warn that file couldn't be parsed - analysis may be incomplete
+          if (process.env.NODE_ENV !== 'test') {
+            console.warn(
+              `Warning: Could not parse imported file ${resolvedPath}. Analysis may be incomplete.`
+            );
+          }
         }
       }
     }

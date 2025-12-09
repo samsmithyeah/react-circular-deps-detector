@@ -50,41 +50,89 @@ export function detectUseEffectWithoutDeps(
   // First pass: find local functions that call state setters (directly or indirectly)
   const functionsCallingSetters = new Map<string, string[]>(); // function name -> setters it calls
 
+  // Helper to find setters called within a function body
+  function findSettersCalledInFunction(
+    funcPath: NodePath<t.ArrowFunctionExpression | t.FunctionExpression | t.ObjectMethod>
+  ): string[] {
+    const settersCalled: string[] = [];
+    funcPath.traverse({
+      CallExpression(innerCallPath: NodePath<t.CallExpression>) {
+        // Check for direct calls: setData(x)
+        if (t.isIdentifier(innerCallPath.node.callee)) {
+          const calleeName = innerCallPath.node.callee.name;
+          if (setterNames.has(calleeName)) {
+            settersCalled.push(calleeName);
+          }
+        }
+
+        // Check for setters passed as arguments: .then(setData)
+        for (const arg of innerCallPath.node.arguments || []) {
+          if (t.isIdentifier(arg) && setterNames.has(arg.name)) {
+            settersCalled.push(arg.name);
+          }
+        }
+      },
+    });
+    return settersCalled;
+  }
+
+  // Track object methods: const utils = { update: () => setCount(...) }
+  // We track these as "objectName.methodName" for matching later
+  const objectMethodsCallingSetters = new Map<string, string[]>(); // "obj.method" -> setters
+
   traverse(ast, {
     // Track arrow function assignments: const fetchData = () => { setData(...) }
     VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
       if (!t.isIdentifier(varPath.node.id)) return;
-      const funcName = varPath.node.id.name;
+      const varName = varPath.node.id.name;
       const init = varPath.node.init;
 
-      if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+      // Handle direct function assignments
+      if (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init)) {
+        const funcPath = varPath.get('init') as NodePath<
+          t.ArrowFunctionExpression | t.FunctionExpression
+        >;
+        const settersCalled = findSettersCalledInFunction(funcPath);
+        if (settersCalled.length > 0) {
+          functionsCallingSetters.set(varName, settersCalled);
+        }
+      }
 
-      // Check if this function calls any setters (directly or passes them as callbacks)
-      const settersCalled: string[] = [];
-      const funcPath = varPath.get('init') as NodePath<
-        t.ArrowFunctionExpression | t.FunctionExpression
-      >;
-      funcPath.traverse({
-        CallExpression(innerCallPath: NodePath<t.CallExpression>) {
-          // Check for direct calls: setData(x)
-          if (t.isIdentifier(innerCallPath.node.callee)) {
-            const calleeName = innerCallPath.node.callee.name;
-            if (setterNames.has(calleeName)) {
-              settersCalled.push(calleeName);
-            }
+      // Handle object expressions: const utils = { update: () => setCount(...) }
+      if (t.isObjectExpression(init)) {
+        const objPath = varPath.get('init') as NodePath<t.ObjectExpression>;
+        for (const propPath of objPath.get('properties')) {
+          if (!propPath.isObjectProperty() && !propPath.isObjectMethod()) continue;
+
+          const prop = propPath.node;
+          let methodName: string | null = null;
+
+          if (t.isIdentifier(prop.key)) {
+            methodName = prop.key.name;
+          } else if (t.isStringLiteral(prop.key)) {
+            methodName = prop.key.value;
           }
 
-          // Check for setters passed as arguments: .then(setData)
-          for (const arg of innerCallPath.node.arguments || []) {
-            if (t.isIdentifier(arg) && setterNames.has(arg.name)) {
-              settersCalled.push(arg.name);
+          if (!methodName) continue;
+
+          if (propPath.isObjectMethod()) {
+            const settersCalled = findSettersCalledInFunction(propPath as NodePath<t.ObjectMethod>);
+            if (settersCalled.length > 0) {
+              objectMethodsCallingSetters.set(`${varName}.${methodName}`, settersCalled);
+            }
+          } else if (propPath.isObjectProperty()) {
+            const value = (prop as t.ObjectProperty).value;
+            if (t.isArrowFunctionExpression(value) || t.isFunctionExpression(value)) {
+              const valuePath = (propPath as NodePath<t.ObjectProperty>).get('value') as NodePath<
+                t.ArrowFunctionExpression | t.FunctionExpression
+              >;
+              const settersCalled = findSettersCalledInFunction(valuePath);
+              if (settersCalled.length > 0) {
+                objectMethodsCallingSetters.set(`${varName}.${methodName}`, settersCalled);
+              }
             }
           }
-        },
-      });
-
-      if (settersCalled.length > 0) {
-        functionsCallingSetters.set(funcName, settersCalled);
+        }
       }
     },
 
@@ -96,26 +144,9 @@ export function detectUseEffectWithoutDeps(
       // Skip component functions (PascalCase)
       if (/^[A-Z]/.test(funcName)) return;
 
-      const settersCalled: string[] = [];
-      funcPath.traverse({
-        CallExpression(innerCallPath: NodePath<t.CallExpression>) {
-          // Check for direct calls: setData(x)
-          if (t.isIdentifier(innerCallPath.node.callee)) {
-            const calleeName = innerCallPath.node.callee.name;
-            if (setterNames.has(calleeName)) {
-              settersCalled.push(calleeName);
-            }
-          }
-
-          // Check for setters passed as arguments: .then(setData)
-          for (const arg of innerCallPath.node.arguments || []) {
-            if (t.isIdentifier(arg) && setterNames.has(arg.name)) {
-              settersCalled.push(arg.name);
-            }
-          }
-        },
-      });
-
+      const settersCalled = findSettersCalledInFunction(
+        funcPath as unknown as NodePath<t.FunctionExpression>
+      );
       if (settersCalled.length > 0) {
         functionsCallingSetters.set(funcName, settersCalled);
       }
@@ -153,19 +184,37 @@ export function detectUseEffectWithoutDeps(
       >;
       callbackPath.traverse({
         CallExpression(innerCallPath: NodePath<t.CallExpression>) {
-          if (!t.isIdentifier(innerCallPath.node.callee)) return;
-          const calleeName = innerCallPath.node.callee.name;
+          const callee = innerCallPath.node.callee;
 
-          // Direct setter call
-          if (setterNames.has(calleeName)) {
-            setterCallsInCallback.push(calleeName);
+          // Handle direct function calls: funcName()
+          if (t.isIdentifier(callee)) {
+            const calleeName = callee.name;
+
+            // Direct setter call
+            if (setterNames.has(calleeName)) {
+              setterCallsInCallback.push(calleeName);
+            }
+
+            // Function call that might lead to setter
+            if (functionsCallingSetters.has(calleeName)) {
+              functionCallsInCallback.push(calleeName);
+              const indirectSetters = functionsCallingSetters.get(calleeName) || [];
+              setterCallsInCallback.push(...indirectSetters);
+            }
           }
 
-          // Function call that might lead to setter
-          if (functionsCallingSetters.has(calleeName)) {
-            functionCallsInCallback.push(calleeName);
-            const indirectSetters = functionsCallingSetters.get(calleeName) || [];
-            setterCallsInCallback.push(...indirectSetters);
+          // Handle member expression calls: obj.method()
+          if (
+            t.isMemberExpression(callee) &&
+            t.isIdentifier(callee.object) &&
+            t.isIdentifier(callee.property)
+          ) {
+            const methodKey = `${callee.object.name}.${callee.property.name}`;
+            if (objectMethodsCallingSetters.has(methodKey)) {
+              functionCallsInCallback.push(methodKey);
+              const indirectSetters = objectMethodsCallingSetters.get(methodKey) || [];
+              setterCallsInCallback.push(...indirectSetters);
+            }
           }
         },
       });

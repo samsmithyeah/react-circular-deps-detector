@@ -5,6 +5,7 @@
  */
 
 import * as t from '@babel/types';
+import traverse from '@babel/traverse';
 import { HookAnalysis, CreateAnalysisParams, AnalyzerOptions } from './types';
 
 /**
@@ -164,7 +165,9 @@ export function usesObjectSpread(setterArg: t.Node | null | undefined, stateVar:
 }
 
 /**
- * Check if a condition references a state variable
+ * Check if a condition references a state variable.
+ * Uses @babel/traverse for robust traversal that handles all node types
+ * including CallExpression arguments, computed properties, etc.
  */
 export function conditionInvolvesState(
   condition: t.Node | null | undefined,
@@ -172,24 +175,19 @@ export function conditionInvolvesState(
 ): boolean {
   if (!condition) return false;
 
-  if (condition.type === 'Identifier' && condition.name === stateVar) {
-    return true;
-  }
+  let found = false;
 
-  if (condition.type === 'BinaryExpression' || condition.type === 'LogicalExpression') {
-    return (
-      conditionInvolvesState(condition.left, stateVar) ||
-      conditionInvolvesState(condition.right, stateVar)
-    );
-  }
+  // Using @babel/traverse is more robust than manual traversal
+  // as it handles all node types and expression contexts correctly.
+  traverse(condition, {
+    noScope: true,
+    Identifier(path) {
+      if (path.node.name === stateVar && path.isReferencedIdentifier()) {
+        found = true;
+        path.stop();
+      }
+    },
+  });
 
-  if (condition.type === 'UnaryExpression') {
-    return conditionInvolvesState(condition.argument, stateVar);
-  }
-
-  if (condition.type === 'MemberExpression') {
-    return conditionInvolvesState(condition.object, stateVar);
-  }
-
-  return false;
+  return found;
 }
