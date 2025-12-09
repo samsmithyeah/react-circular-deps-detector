@@ -27,7 +27,7 @@ export function isGitRepository(dir: string): boolean {
   try {
     execFileSync('git', ['rev-parse', '--git-dir'], {
       cwd: dir,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
     return true;
@@ -43,7 +43,7 @@ export function getGitRoot(dir: string): string | null {
   try {
     const result = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: dir,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
     return result.trim();
@@ -60,7 +60,7 @@ export function getMergeBase(targetRef: string, cwd: string): string | null {
   try {
     const result = execFileSync('git', ['merge-base', 'HEAD', targetRef], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
     return result.trim();
@@ -76,35 +76,13 @@ export function isValidGitRef(ref: string, cwd: string): boolean {
   try {
     execFileSync('git', ['rev-parse', '--verify', ref], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
     return true;
   } catch {
     return false;
   }
-}
-
-/**
- * Helper to process git output into changed files
- */
-function processChangedFiles(diffOutput: string, gitRoot: string, extensions: string[]): string[] {
-  const changedFiles: string[] = [];
-  const files = diffOutput
-    .trim()
-    .split('\n')
-    .filter((line) => line.length > 0);
-
-  for (const file of files) {
-    const absolutePath = path.resolve(gitRoot, file);
-    const ext = path.extname(file);
-
-    if (extensions.includes(ext) && fs.existsSync(absolutePath)) {
-      changedFiles.push(absolutePath);
-    }
-  }
-
-  return changedFiles;
 }
 
 /**
@@ -140,127 +118,59 @@ export function getChangedFilesSinceRef(options: GitChangedFilesOptions): GitCha
   const extensions = options.extensions || ['.js', '.jsx', '.ts', '.tsx'];
 
   try {
-    // Get diff of committed changes using three-dot syntax
-    const diffOutput = execFileSync('git', ['diff', '--name-only', `${compareRef}...HEAD`], {
-      cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
+    // Get diff of committed changes - try three-dot syntax first, fallback to two-dot
+    let committedDiff: string;
+    try {
+      committedDiff = execFileSync('git', ['diff', '--name-only', `${compareRef}...HEAD`], {
+        cwd,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+      });
+    } catch {
+      // If the three-dot syntax fails (e.g., for initial commits), try two-dot
+      committedDiff = execFileSync('git', ['diff', '--name-only', compareRef], {
+        cwd,
+        stdio: 'pipe',
+        encoding: 'utf-8',
+      });
+    }
 
     // Also get uncommitted changes (staged and unstaged)
     const statusOutput = execFileSync('git', ['diff', '--name-only', 'HEAD'], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
 
     // Get untracked files
     const untrackedOutput = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
 
-    // Combine all changed files
-    const allFiles = new Set<string>();
+    // Combine all changed files and deduplicate
+    const allRelativeFiles = [
+      ...committedDiff.trim().split('\n'),
+      ...statusOutput.trim().split('\n'),
+      ...untrackedOutput.trim().split('\n'),
+    ];
 
-    const parseOutput = (output: string): string[] => {
-      return output
-        .trim()
-        .split('\n')
-        .filter((line) => line.length > 0);
-    };
-
-    for (const file of parseOutput(diffOutput)) {
-      allFiles.add(file);
-    }
-    for (const file of parseOutput(statusOutput)) {
-      allFiles.add(file);
-    }
-    for (const file of parseOutput(untrackedOutput)) {
-      allFiles.add(file);
-    }
-
-    // Convert to absolute paths and filter by extension
-    const changedFiles: string[] = [];
-
-    for (const file of allFiles) {
-      const absolutePath = path.resolve(gitRoot, file);
-      const ext = path.extname(file);
-
-      // Filter by extension
-      if (!extensions.includes(ext)) {
-        continue;
-      }
-
-      // Only include files that still exist (filter out deleted files)
-      if (fs.existsSync(absolutePath)) {
-        changedFiles.push(absolutePath);
-      }
-    }
+    const changedFiles = Array.from(new Set(allRelativeFiles))
+      .filter((file) => file.length > 0)
+      .map((file) => path.resolve(gitRoot, file))
+      .filter((absolutePath) => {
+        const ext = path.extname(absolutePath);
+        return extensions.includes(ext) && fs.existsSync(absolutePath);
+      });
 
     return {
       changedFiles,
       baseRef,
       isGitRepo: true,
     };
-  } catch {
-    // If the three-dot syntax fails (e.g., for initial commits), try two-dot
-    try {
-      const diffOutput = execFileSync('git', ['diff', '--name-only', compareRef], {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        encoding: 'utf-8',
-      });
-
-      // Also get uncommitted changes and untracked files for consistency
-      const statusOutput = execFileSync('git', ['diff', '--name-only', 'HEAD'], {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        encoding: 'utf-8',
-      });
-
-      const untrackedOutput = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        encoding: 'utf-8',
-      });
-
-      const allFiles = new Set<string>();
-      const parseOutput = (output: string): string[] => {
-        return output
-          .trim()
-          .split('\n')
-          .filter((line) => line.length > 0);
-      };
-
-      for (const file of parseOutput(diffOutput)) {
-        allFiles.add(file);
-      }
-      for (const file of parseOutput(statusOutput)) {
-        allFiles.add(file);
-      }
-      for (const file of parseOutput(untrackedOutput)) {
-        allFiles.add(file);
-      }
-
-      const changedFiles = processChangedFiles(
-        Array.from(allFiles).join('\n'),
-        gitRoot,
-        extensions
-      );
-
-      return {
-        changedFiles,
-        baseRef,
-        isGitRepo: true,
-      };
-    } catch (fallbackError) {
-      // Report the fallback error, not the original one
-      throw new Error(
-        `Failed to get git diff: ${fallbackError instanceof Error ? fallbackError.message : fallbackError}`
-      );
-    }
+  } catch (error) {
+    throw new Error(`Failed to get git diff: ${error instanceof Error ? error.message : error}`);
   }
 }
 
@@ -271,7 +181,7 @@ export function getCurrentBranch(cwd: string): string | null {
   try {
     const result = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
       encoding: 'utf-8',
     });
     return result.trim();

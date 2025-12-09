@@ -487,9 +487,10 @@ function findFilesImportingChangedFiles(
   const pathResolver = createPathResolver({ projectRoot });
   const dependentFiles: string[] = [];
 
-  // Regex to match import statements
-  const importRegex = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
-  const requireRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+  // Combined regex to match both import and require statements in a single pass
+  // Group 1: import path, Group 2: require path
+  const importRequireRegex =
+    /(?:import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"])|(?:require\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
 
   for (const file of allFiles) {
     // Skip files that are already in the changed set
@@ -500,15 +501,16 @@ function findFilesImportingChangedFiles(
     try {
       const content = fs.readFileSync(file, 'utf-8');
 
-      // Find all import paths
+      // Find all import paths in a single pass
       const importPaths: string[] = [];
 
       let match;
-      while ((match = importRegex.exec(content)) !== null) {
-        importPaths.push(match[1]);
-      }
-      while ((match = requireRegex.exec(content)) !== null) {
-        importPaths.push(match[1]);
+      while ((match = importRequireRegex.exec(content)) !== null) {
+        // match[1] is for imports, match[2] is for requires
+        const importPath = match[1] || match[2];
+        if (importPath) {
+          importPaths.push(importPath);
+        }
       }
 
       // Check if any import path resolves to a changed file
