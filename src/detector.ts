@@ -16,6 +16,7 @@ import {
 } from './config';
 import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
+import { getChangedFilesSinceRef } from './git-utils';
 
 export interface CircularDependency {
   file: string;
@@ -54,6 +55,10 @@ export interface DetectorOptions {
   strict?: boolean;
   /** Custom path to tsconfig.json (for strict mode) */
   tsconfigPath?: string;
+  /** Only analyze files changed since this git ref (e.g., 'main', 'HEAD~5') */
+  since?: string;
+  /** When using --since, also include files that import the changed files */
+  includeDependents?: boolean;
 }
 
 // Minimum file count to benefit from parallel processing
@@ -76,10 +81,51 @@ export async function detectCircularDependencies(
   const mergedIgnore = [...options.ignore, ...(config.ignore || [])];
   const mergedOptions = { ...options, ignore: mergedIgnore };
 
-  const files = await findFiles(targetPath, mergedOptions);
+  // Get all files matching the pattern
+  const allFiles = await findFiles(targetPath, mergedOptions);
 
   // Filter to React files first
-  const reactFiles = files.filter((file) => isLikelyReactFile(file));
+  const allReactFiles = allFiles.filter((file) => isLikelyReactFile(file));
+
+  // Apply git-based filtering if --since is specified
+  let reactFiles: string[];
+  if (options.since) {
+    const gitResult = getChangedFilesSinceRef({
+      since: options.since,
+      cwd: targetPath,
+      extensions: ['.js', '.jsx', '.ts', '.tsx'],
+    });
+
+    if (!gitResult.isGitRepo) {
+      throw new Error(`Cannot use --since: "${targetPath}" is not inside a git repository`);
+    }
+
+    // Create a set of changed files for fast lookup
+    const changedFilesSet = new Set(gitResult.changedFiles);
+
+    // Filter to only files that are both React files AND changed
+    reactFiles = allReactFiles.filter((file) => changedFilesSet.has(file));
+
+    // If --include-dependents is specified, find files that import changed files
+    if (options.includeDependents && reactFiles.length > 0) {
+      // We need to parse all React files to build the dependency graph
+      // Then find which files import the changed files
+      const dependentFiles = findFilesImportingChangedFiles(
+        allReactFiles,
+        changedFilesSet,
+        targetPath
+      );
+
+      // Add dependent files to the analysis set
+      const allFilesToAnalyze = new Set(reactFiles);
+      for (const file of dependentFiles) {
+        allFilesToAnalyze.add(file);
+      }
+      reactFiles = Array.from(allFilesToAnalyze);
+    }
+  } else {
+    reactFiles = allReactFiles;
+  }
 
   // Decide whether to use parallel processing
   // Use parallel if explicitly enabled OR if we have many files and it wasn't explicitly disabled
@@ -426,4 +472,81 @@ function isPrimitiveOrImported(varName: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Find files that import any of the changed files.
+ * Uses a lightweight regex-based approach to avoid full parsing overhead.
+ */
+function findFilesImportingChangedFiles(
+  allFiles: string[],
+  changedFiles: Set<string>,
+  projectRoot: string
+): string[] {
+  const { createPathResolver } = require('./path-resolver');
+  const pathResolver = createPathResolver({ projectRoot });
+
+  // Build a set of basenames and directory names for quick matching
+  const changedBasenames = new Set<string>();
+  const changedDirBases = new Map<string, string>(); // dirname -> full path
+
+  for (const file of changedFiles) {
+    const basename = path.basename(file, path.extname(file));
+    changedBasenames.add(basename);
+
+    // Also track the directory relationship
+    const dirName = path.dirname(file);
+    changedDirBases.set(path.basename(dirName) + '/' + basename, file);
+  }
+
+  const dependentFiles: string[] = [];
+
+  // Regex to match import statements
+  const importRegex = /import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"]/g;
+  const requireRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+  for (const file of allFiles) {
+    // Skip files that are already in the changed set
+    if (changedFiles.has(file)) {
+      continue;
+    }
+
+    try {
+      const content = fs.readFileSync(file, 'utf-8');
+
+      // Find all import paths
+      const importPaths: string[] = [];
+
+      let match;
+      while ((match = importRegex.exec(content)) !== null) {
+        importPaths.push(match[1]);
+      }
+      while ((match = requireRegex.exec(content)) !== null) {
+        importPaths.push(match[1]);
+      }
+
+      // Check if any import path resolves to a changed file
+      for (const importPath of importPaths) {
+        // Skip external packages
+        if (
+          !importPath.startsWith('.') &&
+          !importPath.startsWith('@/') &&
+          !importPath.startsWith('~/')
+        ) {
+          continue;
+        }
+
+        // Try to resolve the import
+        const resolved = pathResolver.resolve(file, importPath);
+        if (resolved && changedFiles.has(resolved)) {
+          dependentFiles.push(file);
+          break;
+        }
+      }
+    } catch {
+      // Skip files that can't be read
+    }
+  }
+
+  return dependentFiles;
 }

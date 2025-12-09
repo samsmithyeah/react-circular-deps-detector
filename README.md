@@ -72,6 +72,15 @@ rld ./src --sarif > results.sarif
 
 # Generate default config file
 rld init
+
+# Analyze only files changed since a git ref (essential for CI in large repos)
+rld ./src --since main
+
+# Also analyze files that import the changed files
+rld ./src --since main --include-dependents
+
+# Compare against a specific commit
+rld ./src --since HEAD~5
 ```
 
 ### NPM Scripts
@@ -85,6 +94,26 @@ If installed locally, add to your `package.json`:
   }
 }
 ```
+
+### CI/CD Integration
+
+For large repositories, use `--since` to only analyze changed files. This dramatically speeds up CI checks:
+
+```yaml
+# GitHub Actions example
+- name: Check for React loops
+  run: npx react-loop-detector ./src --since origin/main --include-dependents
+```
+
+The `--since` option:
+- Only analyzes files that have changed since the specified git ref
+- Automatically includes uncommitted and untracked files
+- Works with branch names (`main`), commits (`abc123`), or relative refs (`HEAD~5`)
+
+The `--include-dependents` option:
+- Also analyzes files that import the changed files
+- Catches issues where changes in one file affect others
+- Recommended for thorough CI checks
 
 ### Programmatic API
 
