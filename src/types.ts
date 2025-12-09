@@ -30,6 +30,7 @@ export type ErrorCode =
   | 'RLD-404' // Unstable context provider value
   | 'RLD-405' // Unstable JSX prop
   | 'RLD-406' // Unstable callback in useCallback deps (dependency chain)
+  | 'RLD-407' // useSyncExternalStore unstable getSnapshot function
   | 'RLD-410' // Object spread guard risk
   | 'RLD-420' // useCallback/useMemo modifies dependency (no direct loop but review)
   | 'RLD-500' // useEffect missing dependency array

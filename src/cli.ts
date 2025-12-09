@@ -209,6 +209,30 @@ function generateSarifReport(results: DetectionResults): SarifReport {
       properties: { category: 'performance' },
     },
     {
+      id: 'RLD-404',
+      name: 'Unstable Context Value',
+      shortDescription: { text: 'Unstable context provider value' },
+      properties: { category: 'performance' },
+    },
+    {
+      id: 'RLD-405',
+      name: 'Unstable JSX Prop',
+      shortDescription: { text: 'Unstable JSX prop' },
+      properties: { category: 'performance' },
+    },
+    {
+      id: 'RLD-406',
+      name: 'Unstable Callback Dep',
+      shortDescription: { text: 'Unstable callback in useCallback deps' },
+      properties: { category: 'performance' },
+    },
+    {
+      id: 'RLD-407',
+      name: 'useSyncExternalStore Unstable Snapshot',
+      shortDescription: { text: 'Unstable getSnapshot in useSyncExternalStore' },
+      properties: { category: 'critical' },
+    },
+    {
       id: 'RLD-410',
       name: 'Object Spread Risk',
       shortDescription: { text: 'Object spread guard risk' },
@@ -230,6 +254,12 @@ function generateSarifReport(results: DetectionResults): SarifReport {
       id: 'RLD-501',
       name: 'Conditional Modification',
       shortDescription: { text: 'Conditional modification needs review' },
+      properties: { category: 'warning' },
+    },
+    {
+      id: 'RLD-600',
+      name: 'Ref Mutation Risk',
+      shortDescription: { text: 'Ref mutation with state value (stale closure risk)' },
       properties: { category: 'warning' },
     },
   ];
