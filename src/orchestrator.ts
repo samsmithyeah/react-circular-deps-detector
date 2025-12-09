@@ -192,11 +192,12 @@ function analyzeFileIntelligently(
     results.push(...noDepsIssues);
 
     // Check for unstable props passed to JSX elements (including Context.Provider)
-    // Pass imports and all parsed files for cross-file memoization detection
+    // Pass localMemoizedComponents, imports and all parsed files for cross-file memoization detection
     const jsxPropIssues = analyzeJsxProps(
       ast,
       unstableVars,
       file.file,
+      file.localMemoizedComponents,
       file.imports,
       allParsedFiles
     );

@@ -17,7 +17,7 @@ import * as path from 'path';
 import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis } from './types';
 import { UnstableVariable } from './state-extractor';
-import { createAnalysis, isMemoCallExpression } from './utils';
+import { createAnalysis } from './utils';
 import { ImportInfo, ParsedFile } from './parser';
 
 /** Information about a JSX prop with an unstable value */
@@ -27,28 +27,6 @@ interface UnstableJsxProp {
   unstableVar: UnstableVariable;
   line: number;
   isContextProvider: boolean;
-}
-
-/**
- * Find local components that are wrapped with memo() or React.memo()
- * within the same file.
- */
-function findLocalMemoizedComponents(ast: t.Node): Set<string> {
-  const memoizedComponents = new Set<string>();
-
-  traverse(ast, {
-    noScope: true,
-    CallExpression(nodePath: NodePath<t.CallExpression>) {
-      if (isMemoCallExpression(nodePath.node)) {
-        const parent = nodePath.parent;
-        if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
-          memoizedComponents.add(parent.id.name);
-        }
-      }
-    },
-  });
-
-  return memoizedComponents;
 }
 
 /**
@@ -103,6 +81,9 @@ function isComponentMemoized(
 
     if (!sourceFile) continue;
 
+    // Get the original imported name (handles aliased imports like `import { Button as MyButton }`)
+    const originalImportedName = imp.importedNames.get(rootIdentifier);
+
     // Check if the component is exported as memoized from that file
     for (const exp of sourceFile.exports) {
       let isMatch = false;
@@ -113,9 +94,13 @@ function isComponentMemoized(
         if (imp.isNamespaceImport && exp.name === componentParts[1] && !exp.isDefault) {
           isMatch = true;
         }
+      } else if (originalImportedName === 'default') {
+        // Default import: `import Button from ...`
+        isMatch = exp.isDefault;
       } else {
-        // e.g., <Button /> from `import { Button } ...` or `import Button from ...`
-        isMatch = (imp.isDefaultImport && exp.isDefault) || exp.name === rootIdentifier;
+        // Named import: `import { Button } ...` or `import { Button as MyButton } ...`
+        // Use the original imported name to match against the export
+        isMatch = exp.name === originalImportedName;
       }
 
       if (isMatch && exp.isMemoized) {
@@ -136,6 +121,7 @@ function isComponentMemoized(
  * @param ast - The AST to analyze
  * @param unstableVars - Map of unstable variables in the file
  * @param filePath - Path of the current file
+ * @param localMemoizedComponents - Set of locally memoized component names (from parser)
  * @param imports - Import declarations (optional, for cross-file memoization detection)
  * @param allParsedFiles - All parsed files (optional, for cross-file memoization detection)
  */
@@ -143,14 +129,12 @@ export function analyzeJsxProps(
   ast: t.Node,
   unstableVars: Map<string, UnstableVariable>,
   filePath: string,
+  localMemoizedComponents: Set<string>,
   imports?: ImportInfo[],
   allParsedFiles?: ParsedFile[]
 ): HookAnalysis[] {
   const results: HookAnalysis[] = [];
   const unstableProps: UnstableJsxProp[] = [];
-
-  // Find locally memoized components
-  const localMemoizedComponents = findLocalMemoizedComponents(ast);
 
   traverse(ast, {
     JSXAttribute(nodePath: NodePath<t.JSXAttribute>) {

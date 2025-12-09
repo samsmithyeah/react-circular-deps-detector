@@ -540,6 +540,104 @@ describe('JSX Prop Memoization Detection', () => {
       );
       expect(jsxPropIssues).toHaveLength(0);
     });
+
+    it('should detect unstable prop passed to aliased import of memoized component', async () => {
+      // Create the memoized component file
+      const childFile = path.join(tempDir, 'MemoButton.tsx');
+      fs.writeFileSync(
+        childFile,
+        `
+        import React, { memo } from 'react';
+
+        interface Props {
+          onClick: () => void;
+        }
+
+        export const MemoButton = memo(function Button({ onClick }: Props) {
+          return <button onClick={onClick}>Click</button>;
+        });
+      `
+      );
+
+      // Create the parent file that imports with an alias
+      const parentFile = path.join(tempDir, 'ParentAliased.tsx');
+      fs.writeFileSync(
+        parentFile,
+        `
+        import React, { useState } from 'react';
+        import { MemoButton as MyButton } from './MemoButton';
+
+        function Parent() {
+          const [count, setCount] = useState(0);
+
+          const handleClick = () => setCount(c => c + 1);
+
+          // Should warn - MyButton is an alias for memoized MemoButton
+          return <MyButton onClick={handleClick} />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const jsxPropIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-405'
+      );
+      expect(jsxPropIssues.length).toBeGreaterThan(0);
+      expect(jsxPropIssues[0].file).toContain('ParentAliased.tsx');
+      expect(jsxPropIssues[0].problematicDependency).toBe('handleClick');
+    });
+
+    it('should NOT flag unstable prop passed to aliased import of non-memoized component', async () => {
+      // Create the non-memoized component file
+      const childFile = path.join(tempDir, 'RegularButton.tsx');
+      fs.writeFileSync(
+        childFile,
+        `
+        import React from 'react';
+
+        interface Props {
+          onClick: () => void;
+        }
+
+        export const RegularButton = ({ onClick }: Props) => (
+          <button onClick={onClick}>Click</button>
+        );
+      `
+      );
+
+      // Create the parent file that imports with an alias
+      const parentFile = path.join(tempDir, 'ParentAliasedNonMemo.tsx');
+      fs.writeFileSync(
+        parentFile,
+        `
+        import React, { useState } from 'react';
+        import { RegularButton as MyButton } from './RegularButton';
+
+        function Parent() {
+          const [count, setCount] = useState(0);
+
+          const handleClick = () => setCount(c => c + 1);
+
+          // Should NOT warn - MyButton is an alias for non-memoized RegularButton
+          return <MyButton onClick={handleClick} />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const jsxPropIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-405'
+      );
+      expect(jsxPropIssues).toHaveLength(0);
+    });
   });
 
   describe('Context.Provider should always warn (RLD-404)', () => {

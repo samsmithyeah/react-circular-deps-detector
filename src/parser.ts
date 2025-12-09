@@ -15,7 +15,10 @@ export interface HookInfo {
 
 export interface ImportInfo {
   source: string;
+  /** Local names used in this file (e.g., "MyButton" from `import { Button as MyButton }`) */
   imports: string[];
+  /** Mapping from local name to original imported name (e.g., "MyButton" -> "Button") */
+  importedNames: Map<string, string>;
   isDefaultImport: boolean;
   isNamespaceImport: boolean;
   line: number;
@@ -37,6 +40,8 @@ export interface ParsedFile {
   exports: ExportInfo[];
   functions: Set<string>;
   contexts: Set<string>;
+  /** Components wrapped with memo() or React.memo() defined in this file */
+  localMemoizedComponents: Set<string>;
   ast: t.File; // Store the parsed AST to avoid re-parsing
   content: string; // Store file content for comment analysis
 }
@@ -142,7 +147,18 @@ export function parseFile(filePath: string): ParsedFile {
     },
   });
 
-  return { file: filePath, hooks, variables, imports, exports, functions, contexts, ast, content };
+  return {
+    file: filePath,
+    hooks,
+    variables,
+    imports,
+    exports,
+    functions,
+    contexts,
+    localMemoizedComponents: memoizedComponents,
+    ast,
+    content,
+  };
 }
 
 /**
@@ -169,14 +185,25 @@ export function parseFileWithCache(filePath: string, cache?: AstCache): ParsedFi
         variables.set(key, new Set(values));
       }
 
+      // Convert cached imports back to ImportInfo[] with Map for importedNames
+      const imports: ImportInfo[] = cached.imports.map((imp) => ({
+        source: imp.source,
+        imports: imp.imports,
+        importedNames: new Map(imp.importedNames),
+        isDefaultImport: imp.isDefaultImport,
+        isNamespaceImport: imp.isNamespaceImport,
+        line: imp.line,
+      }));
+
       return {
         file: filePath,
         hooks: cached.hooks,
         variables,
-        imports: cached.imports,
+        imports,
         exports: cached.exports,
         functions: new Set(cached.functions),
         contexts: new Set(cached.contexts),
+        localMemoizedComponents: new Set(cached.localMemoizedComponents),
         ast,
         content,
       };
@@ -190,10 +217,18 @@ export function parseFileWithCache(filePath: string, cache?: AstCache): ParsedFi
   if (cache) {
     const cacheableData: CacheableParsedData = {
       hooks: result.hooks,
-      imports: result.imports,
+      imports: result.imports.map((imp) => ({
+        source: imp.source,
+        imports: imp.imports,
+        importedNames: Array.from(imp.importedNames.entries()),
+        isDefaultImport: imp.isDefaultImport,
+        isNamespaceImport: imp.isNamespaceImport,
+        line: imp.line,
+      })),
       exports: result.exports,
       functions: Array.from(result.functions),
       contexts: Array.from(result.contexts),
+      localMemoizedComponents: Array.from(result.localMemoizedComponents),
       variables: Array.from(result.variables.entries()).map(([k, v]) => [k, Array.from(v)]),
     };
     cache.set(filePath, cacheableData);
@@ -297,24 +332,35 @@ function extractImportInfo(path: NodePath<t.ImportDeclaration>): ImportInfo | nu
   }
 
   const imports: string[] = [];
+  const importedNames = new Map<string, string>();
   let isDefaultImport = false;
   let isNamespaceImport = false;
 
   path.node.specifiers.forEach((spec) => {
     if (t.isImportDefaultSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      imports.push(localName);
+      importedNames.set(localName, 'default');
       isDefaultImport = true;
     } else if (t.isImportNamespaceSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      imports.push(localName);
+      // For namespace imports, all exports are accessible via this name
+      importedNames.set(localName, '*');
       isNamespaceImport = true;
     } else if (t.isImportSpecifier(spec)) {
-      imports.push(spec.local.name);
+      const localName = spec.local.name;
+      // Get the original imported name (handles aliased imports like `import { Button as MyButton }`)
+      const importedName = t.isIdentifier(spec.imported) ? spec.imported.name : spec.imported.value;
+      imports.push(localName);
+      importedNames.set(localName, importedName);
     }
   });
 
   return {
     source,
     imports,
+    importedNames,
     isDefaultImport,
     isNamespaceImport,
     line,
