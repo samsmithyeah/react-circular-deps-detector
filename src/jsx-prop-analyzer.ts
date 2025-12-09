@@ -54,7 +54,7 @@ function findLocalMemoizedComponents(ast: t.Node): Set<string> {
 /**
  * Check if a component is memoized, either locally or from an imported file.
  *
- * @param componentName - The name of the component (e.g., "MyButton")
+ * @param componentName - The name of the component (e.g., "MyButton" or "Components.Button")
  * @param localMemoized - Set of locally memoized component names
  * @param imports - Import declarations from the current file
  * @param allParsedFiles - All parsed files in the project
@@ -78,9 +78,14 @@ function isComponentMemoized(
     return false;
   }
 
+  // Handle member-access component names (e.g., "Components.Button" from namespace imports)
+  const componentParts = componentName.split('.');
+  const rootIdentifier = componentParts[0];
+  const isMemberAccess = componentParts.length > 1;
+
   // Find which import this component comes from
   for (const imp of imports) {
-    if (!imp.imports.includes(componentName)) continue;
+    if (!imp.imports.includes(rootIdentifier)) continue;
 
     // Resolve the import path relative to the current file
     const currentDir = path.dirname(currentFilePath);
@@ -100,8 +105,18 @@ function isComponentMemoized(
 
     // Check if the component is exported as memoized from that file
     for (const exp of sourceFile.exports) {
-      // Match by name - for default imports, check if it's the default export
-      const isMatch = (imp.isDefaultImport && exp.isDefault) || exp.name === componentName;
+      let isMatch = false;
+
+      if (isMemberAccess) {
+        // e.g., <Components.Button /> from `import * as Components from ...`
+        // Match the second part of the component name against named exports
+        if (imp.isNamespaceImport && exp.name === componentParts[1] && !exp.isDefault) {
+          isMatch = true;
+        }
+      } else {
+        // e.g., <Button /> from `import { Button } ...` or `import Button from ...`
+        isMatch = (imp.isDefaultImport && exp.isDefault) || exp.name === rootIdentifier;
+      }
 
       if (isMatch && exp.isMemoized) {
         return true;

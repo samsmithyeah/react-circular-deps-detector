@@ -437,6 +437,109 @@ describe('JSX Prop Memoization Detection', () => {
       );
       expect(jsxPropIssues).toHaveLength(0);
     });
+
+    it('should detect unstable prop passed to memoized component via namespace import', async () => {
+      // Create the memoized component file with named export
+      const componentsFile = path.join(tempDir, 'components.tsx');
+      fs.writeFileSync(
+        componentsFile,
+        `
+        import React, { memo } from 'react';
+
+        interface ButtonProps {
+          onClick: () => void;
+        }
+
+        export const MemoButton = memo(function Button({ onClick }: ButtonProps) {
+          return <button onClick={onClick}>Click</button>;
+        });
+
+        export const RegularButton = ({ onClick }: ButtonProps) => (
+          <button onClick={onClick}>Click</button>
+        );
+      `
+      );
+
+      // Create the parent file that uses namespace import
+      const parentFile = path.join(tempDir, 'ParentNamespace.tsx');
+      fs.writeFileSync(
+        parentFile,
+        `
+        import React, { useState } from 'react';
+        import * as Components from './components';
+
+        function Parent() {
+          const [count, setCount] = useState(0);
+
+          const handleClick = () => setCount(c => c + 1);
+
+          // This should warn - MemoButton is memoized
+          return <Components.MemoButton onClick={handleClick} />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const jsxPropIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-405'
+      );
+      expect(jsxPropIssues.length).toBeGreaterThan(0);
+      expect(jsxPropIssues[0].file).toContain('ParentNamespace.tsx');
+      expect(jsxPropIssues[0].problematicDependency).toBe('handleClick');
+    });
+
+    it('should NOT flag unstable prop to non-memoized component via namespace import', async () => {
+      // Create the component file with named exports
+      const componentsFile = path.join(tempDir, 'componentsNonMemo.tsx');
+      fs.writeFileSync(
+        componentsFile,
+        `
+        import React from 'react';
+
+        interface ButtonProps {
+          onClick: () => void;
+        }
+
+        // Non-memoized component
+        export const RegularButton = ({ onClick }: ButtonProps) => (
+          <button onClick={onClick}>Click</button>
+        );
+      `
+      );
+
+      // Create the parent file that uses namespace import
+      const parentFile = path.join(tempDir, 'ParentNamespaceNonMemo.tsx');
+      fs.writeFileSync(
+        parentFile,
+        `
+        import React, { useState } from 'react';
+        import * as Components from './componentsNonMemo';
+
+        function Parent() {
+          const [count, setCount] = useState(0);
+
+          const handleClick = () => setCount(c => c + 1);
+
+          // This should NOT warn - RegularButton is not memoized
+          return <Components.RegularButton onClick={handleClick} />;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const jsxPropIssues = result.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-405'
+      );
+      expect(jsxPropIssues).toHaveLength(0);
+    });
   });
 
   describe('Context.Provider should always warn (RLD-404)', () => {
