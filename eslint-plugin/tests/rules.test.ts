@@ -5,6 +5,8 @@ import noEffectLoop from '../src/rules/no-effect-loop';
 import noUnstableDeps from '../src/rules/no-unstable-deps';
 import noUnstableVariableDeps from '../src/rules/no-unstable-variable-deps';
 import noMissingDepsArray from '../src/rules/no-missing-deps-array';
+import noUnstableContextValue from '../src/rules/no-unstable-context-value';
+import noUnstableJsxProps from '../src/rules/no-unstable-jsx-props';
 
 // Configure rule tester with parser for TypeScript/JSX
 const ruleTester = new RuleTester({
@@ -422,6 +424,242 @@ describe('no-missing-deps-array', () => {
           }
         `,
         errors: [{ messageId: 'missingDepsArrayWithSetState' }],
+      },
+    ],
+  });
+});
+
+describe('no-unstable-context-value', () => {
+  ruleTester.run('no-unstable-context-value', noUnstableContextValue, {
+    valid: [
+      // Memoized value is stable
+      `
+        function App() {
+          const [user, setUser] = useState(null);
+          const value = useMemo(() => ({ user, setUser }), [user]);
+          return (
+            <UserContext.Provider value={value}>
+              <Child />
+            </UserContext.Provider>
+          );
+        }
+      `,
+      // Primitive value is stable
+      `
+        function App() {
+          const [count, setCount] = useState(0);
+          return (
+            <CountContext.Provider value={count}>
+              <Child />
+            </CountContext.Provider>
+          );
+        }
+      `,
+      // State value is stable
+      `
+        function App() {
+          const [user, setUser] = useState(null);
+          return (
+            <UserContext.Provider value={user}>
+              <Child />
+            </UserContext.Provider>
+          );
+        }
+      `,
+      // Non-Provider JSX is not checked
+      `
+        function App() {
+          return <Component value={{ foo: 'bar' }} />;
+        }
+      `,
+    ],
+    invalid: [
+      // Inline object literal
+      {
+        code: `
+          function App() {
+            const [user, setUser] = useState(null);
+            return (
+              <UserContext.Provider value={{ user, setUser }}>
+                <Child />
+              </UserContext.Provider>
+            );
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectValue' }],
+      },
+      // Inline array literal
+      {
+        code: `
+          function App() {
+            const [items] = useState([]);
+            return (
+              <ItemsContext.Provider value={[items, 'extra']}>
+                <Child />
+              </ItemsContext.Provider>
+            );
+          }
+        `,
+        errors: [{ messageId: 'unstableArrayValue' }],
+      },
+      // Inline function
+      {
+        code: `
+          function App() {
+            return (
+              <CallbackContext.Provider value={() => console.log('click')}>
+                <Child />
+              </CallbackContext.Provider>
+            );
+          }
+        `,
+        errors: [{ messageId: 'unstableFunctionValue' }],
+      },
+      // Unstable variable
+      {
+        code: `
+          function App() {
+            const [user, setUser] = useState(null);
+            const contextValue = { user, setUser };
+            return (
+              <UserContext.Provider value={contextValue}>
+                <Child />
+              </UserContext.Provider>
+            );
+          }
+        `,
+        errors: [{ messageId: 'unstableVariableValue' }],
+      },
+    ],
+  });
+});
+
+describe('no-unstable-jsx-props', () => {
+  ruleTester.run('no-unstable-jsx-props', noUnstableJsxProps, {
+    valid: [
+      // Memoized object is stable
+      `
+        function Parent() {
+          const config = useMemo(() => ({ page: 1 }), []);
+          return <Child config={config} />;
+        }
+      `,
+      // Memoized callback is stable
+      `
+        function Parent() {
+          const onClick = useCallback(() => console.log('clicked'), []);
+          return <Child onClick={onClick} />;
+        }
+      `,
+      // State values are stable
+      `
+        function Parent() {
+          const [count, setCount] = useState(0);
+          return <Child count={count} setCount={setCount} />;
+        }
+      `,
+      // Primitive values are stable
+      `
+        function Parent() {
+          return <Child name="test" count={5} />;
+        }
+      `,
+      // Lowercase elements (DOM) are not checked by default
+      `
+        function Parent() {
+          return <div style={{ color: 'red' }} />;
+        }
+      `,
+      // Ignored props (key, ref, children)
+      `
+        function Parent() {
+          return <Child key={{ id: 1 }} />;
+        }
+      `,
+      // Callback props are not checked by default
+      `
+        function Parent() {
+          return <Child onClick={() => console.log('clicked')} />;
+        }
+      `,
+    ],
+    invalid: [
+      // Inline object literal
+      {
+        code: `
+          function Parent() {
+            return <Child config={{ page: 1 }} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableObjectProp' }],
+      },
+      // Inline array literal
+      {
+        code: `
+          function Parent() {
+            return <Child items={[1, 2, 3]} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableArrayProp' }],
+      },
+      // Unstable object variable
+      {
+        code: `
+          function Parent() {
+            const config = { page: 1 };
+            return <Child config={config} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableVariableProp' }],
+      },
+      // Unstable array variable
+      {
+        code: `
+          function Parent() {
+            const items = [1, 2, 3];
+            return <Child items={items} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableVariableProp' }],
+      },
+      // Unstable function variable (non-callback prop)
+      {
+        code: `
+          function Parent() {
+            const handler = () => console.log('clicked');
+            return <Child handler={handler} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableVariableProp' }],
+      },
+      // Multiple unstable props
+      {
+        code: `
+          function Parent() {
+            const config = { page: 1 };
+            const items = [1, 2, 3];
+            return <Child config={config} items={items} />;
+          }
+        `,
+        errors: [{ messageId: 'unstableVariableProp' }, { messageId: 'unstableVariableProp' }],
+      },
+    ],
+  });
+});
+
+describe('no-unstable-jsx-props with checkCallbacks option', () => {
+  ruleTester.run('no-unstable-jsx-props', noUnstableJsxProps, {
+    valid: [],
+    invalid: [
+      // With checkCallbacks enabled, inline callbacks are flagged
+      {
+        code: `
+          function Parent() {
+            return <Child onClick={() => console.log('clicked')} />;
+          }
+        `,
+        options: [{ checkCallbacks: true }],
+        errors: [{ messageId: 'unstableFunctionProp' }],
       },
     ],
   });

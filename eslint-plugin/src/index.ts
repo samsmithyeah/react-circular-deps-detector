@@ -30,6 +30,8 @@ import noEffectLoop from './rules/no-effect-loop';
 import noUnstableDeps from './rules/no-unstable-deps';
 import noUnstableVariableDeps from './rules/no-unstable-variable-deps';
 import noMissingDepsArray from './rules/no-missing-deps-array';
+import noUnstableContextValue from './rules/no-unstable-context-value';
+import noUnstableJsxProps from './rules/no-unstable-jsx-props';
 import pkg from '../package.json';
 
 const rules = {
@@ -38,6 +40,8 @@ const rules = {
   'no-unstable-deps': noUnstableDeps,
   'no-unstable-variable-deps': noUnstableVariableDeps,
   'no-missing-deps-array': noMissingDepsArray,
+  'no-unstable-context-value': noUnstableContextValue,
+  'no-unstable-jsx-props': noUnstableJsxProps,
 };
 
 const plugin = {
@@ -61,6 +65,8 @@ plugin.configs = {
       'react-loop-detector/no-unstable-deps': 'warn',
       'react-loop-detector/no-unstable-variable-deps': 'error',
       'react-loop-detector/no-missing-deps-array': 'error',
+      'react-loop-detector/no-unstable-context-value': 'error',
+      // no-unstable-jsx-props is off by default as it can be noisy
     },
   },
   strict: {
@@ -73,6 +79,8 @@ plugin.configs = {
       'react-loop-detector/no-unstable-deps': 'error',
       'react-loop-detector/no-unstable-variable-deps': 'error',
       'react-loop-detector/no-missing-deps-array': 'error',
+      'react-loop-detector/no-unstable-context-value': 'error',
+      'react-loop-detector/no-unstable-jsx-props': 'warn',
     },
   },
 };
