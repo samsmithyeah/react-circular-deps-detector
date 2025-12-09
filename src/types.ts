@@ -98,7 +98,10 @@ export interface HookAnalysis {
   setterFunction?: string;
   severity: 'high' | 'medium' | 'low';
   confidence: 'high' | 'medium' | 'low';
+  /** Detailed explanation of the problem */
   explanation: string;
+  /** Actionable suggestion for how to fix the issue */
+  suggestion?: string;
   actualStateModifications: string[];
   stateReads: string[];
   /** Debug information (only populated when debug mode is enabled) */
@@ -195,5 +198,7 @@ export interface CreateAnalysisParams {
   actualStateModifications: string[];
   stateReads: string[];
   explanation: string;
+  /** Actionable suggestion for how to fix the issue */
+  suggestion?: string;
   debugInfo?: DebugInfo;
 }

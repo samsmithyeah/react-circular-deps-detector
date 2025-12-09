@@ -15,7 +15,12 @@ import { HookAnalysis, HookNodeInfo, ErrorCode } from './types';
 import { CrossFileAnalysis } from './cross-file-analyzer';
 import { analyzeSetStateCalls, type SetStateAnalysis } from './control-flow';
 import { analyzeStateInteractions } from './effect-analyzer';
-import { isHookIgnored, createAnalysis } from './utils';
+import {
+  isHookIgnored,
+  createAnalysis,
+  isStrictModeEnabled,
+  getConfidenceExplanation,
+} from './utils';
 
 /**
  * Extract the root identifier from a dependency expression.
@@ -176,6 +181,8 @@ export function analyzeHookNode(
 
       // Handle risky guard patterns like object-spread-risk
       if (guardedMod.guardType === 'object-spread-risk') {
+        const confidenceContext = { isConditional: true, isStrictMode: isStrictModeEnabled() };
+        const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
         return createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-410',
@@ -191,9 +198,11 @@ export function analyzeHookNode(
           actualStateModifications: [setter],
           stateReads: stateInteractions.reads,
           explanation:
-            guardedMod.warning ||
-            `Guard checks property of '${dep}' but setter creates new object reference. ` +
-              `The object identity changes even when the guarded property doesn't, which may cause unexpected re-renders.`,
+            (guardedMod.warning ||
+              `Guard checks property of '${dep}' but setter creates new object reference. ` +
+                `The object identity changes even when the guarded property doesn't, which may cause unexpected re-renders.`) +
+            confidenceExplanation,
+          suggestion: `Compare by value instead of reference: if (prev.property !== newValue) ${setter}({...prev, property: newValue})`,
         });
       }
     }
@@ -264,6 +273,7 @@ export function analyzeHookNode(
         actualStateModifications: stateInteractions.cleanupModifications,
         stateReads: stateInteractions.reads,
         explanation: `${hookName} cleanup function calls '${setter}()' which modifies '${dep}' that the effect depends on. This creates an infinite loop: effect runs → cleanup runs → state changes → effect re-runs.`,
+        suggestion: `Move the setState out of the cleanup function, or remove '${dep}' from the dependency array if it's not needed for the effect logic.`,
       });
     }
 
@@ -327,6 +337,7 @@ export function analyzeHookNode(
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
           explanation: `${hookName} modifies '${dep}' via '${setter}()' while depending on it, creating guaranteed infinite loop.`,
+          suggestion: `Use a functional update: ${setter}(prev => ...) and remove '${dep}' from dependencies, OR add a guard condition to prevent unnecessary updates.`,
           debugInfo: {
             reason: setterCfgAnalysis
               ? `CFG analysis: ${setterCfgAnalysis.explanation}`
@@ -352,6 +363,8 @@ export function analyzeHookNode(
         });
       } else if (canCauseDirectLoop && !isUnconditionalByCFG) {
         // CFG says it's conditional - report as potential issue, not confirmed
+        const confidenceContext = { isConditional: true, isStrictMode: isStrictModeEnabled() };
+        const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
         return createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-501',
@@ -366,7 +379,8 @@ export function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} conditionally modifies '${dep}' via '${setter}()' while depending on it. Review to ensure the condition prevents infinite loops.`,
+          explanation: `${hookName} conditionally modifies '${dep}' via '${setter}()' while depending on it. Review to ensure the condition prevents infinite loops.${confidenceExplanation}`,
+          suggestion: `Verify the guard condition correctly prevents re-execution, or use a functional update: ${setter}(prev => ...)`,
           debugInfo: {
             reason: setterCfgAnalysis
               ? `CFG analysis: ${setterCfgAnalysis.explanation}`
@@ -384,6 +398,8 @@ export function analyzeHookNode(
           return null; // Functional updater in useCallback/useMemo is safe
         }
         // Only warn if it's NOT using functional updater (reads dep value directly)
+        const confidenceContext = { isConditional: false, isStrictMode: isStrictModeEnabled() };
+        const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
         return createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-420',
@@ -398,7 +414,8 @@ export function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.modifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute), but review if a useEffect depends on this callback.`,
+          explanation: `${hookName} modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute), but review if a useEffect depends on this callback.${confidenceExplanation}`,
+          suggestion: `Use a functional update: ${setter}(prev => ...) to avoid depending on '${dep}'.`,
         });
       }
     }
@@ -421,8 +438,15 @@ export function analyzeHookNode(
           actualStateModifications: crossFileModifications,
           stateReads: stateInteractions.reads,
           explanation: `${hookName} indirectly modifies '${dep}' via function calls while depending on it, creating guaranteed infinite loop.`,
+          suggestion: `Add a guard condition in the called function, or restructure to avoid the circular dependency.`,
         });
       } else {
+        const confidenceContext = {
+          crossFileChainDepth: 2,
+          isConditional: false,
+          isStrictMode: isStrictModeEnabled(),
+        };
+        const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
         return createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-301',
@@ -437,7 +461,8 @@ export function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: crossFileModifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} indirectly modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute).`,
+          explanation: `${hookName} indirectly modifies '${dep}' while depending on it. This won't cause a direct infinite loop (${hookName} doesn't auto-execute).${confidenceExplanation}`,
+          suggestion: `Review if any useEffect calls this ${hookName} - if so, ensure proper guards are in place.`,
         });
       }
     }
@@ -445,6 +470,8 @@ export function analyzeHookNode(
     // Check conditional modifications (that weren't identified as safely guarded)
     if (stateInteractions.conditionalModifications.includes(setter)) {
       if (canCauseDirectLoop) {
+        const confidenceContext = { isConditional: true, isStrictMode: isStrictModeEnabled() };
+        const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
         return createAnalysis({
           type: 'potential-issue',
           errorCode: 'RLD-501',
@@ -459,7 +486,8 @@ export function analyzeHookNode(
           setterFunction: setter,
           actualStateModifications: stateInteractions.conditionalModifications,
           stateReads: stateInteractions.reads,
-          explanation: `${hookName} conditionally modifies '${dep}' - review if conditions prevent infinite loops.`,
+          explanation: `${hookName} conditionally modifies '${dep}' - review if conditions prevent infinite loops.${confidenceExplanation}`,
+          suggestion: `Ensure the condition compares values correctly and prevents re-execution when state hasn't meaningfully changed.`,
         });
       } else {
         // useCallback/useMemo with conditional modification - very unlikely to be a problem
@@ -483,6 +511,12 @@ export function analyzeHookNode(
 
         if (refInDeps) {
           // Ref is both mutated with state value AND in dependencies - potential loop
+          const confidenceContext = {
+            usedTypeInference: true,
+            isConditional: false,
+            isStrictMode: isStrictModeEnabled(),
+          };
+          const confidenceExplanation = getConfidenceExplanation('low', confidenceContext);
           return createAnalysis({
             type: 'potential-issue',
             errorCode: 'RLD-600',
@@ -497,7 +531,8 @@ export function analyzeHookNode(
             setterFunction: 'ref.current =',
             actualStateModifications: [],
             stateReads: stateInteractions.reads,
-            explanation: `${hookName} mutates '${refMutation.refName}.current' with state value while depending on the ref. This can cause stale closure issues.`,
+            explanation: `${hookName} mutates '${refMutation.refName}.current' with state value while depending on the ref. This can cause stale closure issues.${confidenceExplanation}`,
+            suggestion: `Remove '${refMutation.refName}' from the dependency array (refs are stable), or use the state value directly instead of storing in a ref.`,
             debugInfo: {
               reason: `Ref '${refMutation.refName}' is mutated with state value '${refMutation.assignedValue}' and appears in dependencies`,
               stateTracking: {

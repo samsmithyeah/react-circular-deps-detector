@@ -83,13 +83,17 @@ const CONFIG_FILES = ['rld.config.js', 'rld.config.json', '.rldrc', '.rldrc.json
 
 /**
  * Default configuration
+ *
+ * Note: minConfidence defaults to 'medium' to reduce alert fatigue.
+ * Low-confidence detections are hidden by default since they may be false positives.
+ * Users can set minConfidence: 'low' to see all detections including uncertain ones.
  */
 export const DEFAULT_CONFIG: Required<RcdConfig> = {
   stableHooks: [],
   unstableHooks: [],
   ignore: [],
   minSeverity: 'low',
-  minConfidence: 'low',
+  minConfidence: 'medium', // Default to medium to reduce false positives
   includePotentialIssues: true,
   customFunctions: {},
   strictMode: false,

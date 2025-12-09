@@ -48,7 +48,7 @@ interface ServerSettings {
 const defaultSettings: ServerSettings = {
   enable: true,
   minSeverity: 'low',
-  minConfidence: 'low',
+  minConfidence: 'medium', // Default to medium to reduce alert fatigue
   strictMode: false,
   debounceMs: 1000,
 };

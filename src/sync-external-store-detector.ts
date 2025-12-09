@@ -17,7 +17,12 @@ import * as t from '@babel/types';
 import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis, ErrorCode } from './types';
 import { UnstableVariable } from './state-extractor';
-import { isHookIgnored, createAnalysis } from './utils';
+import {
+  isHookIgnored,
+  createAnalysis,
+  isStrictModeEnabled,
+  getConfidenceExplanation,
+} from './utils';
 
 interface SyncExternalStoreCall {
   node: t.CallExpression;
@@ -184,8 +189,8 @@ export function detectUnstableSyncExternalStore(
             explanation:
               `The getSnapshot function passed to useSyncExternalStore returns a new object/array on every call. ` +
               `This causes a synchronous infinite loop because React compares snapshots by reference, ` +
-              `and a new object is never equal to the previous one. ` +
-              `Fix: Return a cached value, use a primitive, or memoize the result outside the callback.`,
+              `and a new object is never equal to the previous one.`,
+            suggestion: `Return a cached value, use a primitive, or memoize the result outside the callback.`,
             debugInfo: {
               reason: 'Inline getSnapshot function returns new object/array literal',
             },
@@ -205,6 +210,12 @@ export function detectUnstableSyncExternalStore(
       if (unstableVar && !unstableVar.isMemoized) {
         // Check if it's a function type
         if (unstableVar.type === 'function' || unstableVar.type === 'function-call') {
+          const confidenceContext = {
+            usedTypeInference: true,
+            isConditional: false,
+            isStrictMode: isStrictModeEnabled(),
+          };
+          const confidenceExplanation = getConfidenceExplanation('medium', confidenceContext);
           results.push(
             createAnalysis({
               type: 'potential-issue',
@@ -223,8 +234,8 @@ export function detectUnstableSyncExternalStore(
               stateReads: [],
               explanation:
                 `'${varName}' passed as getSnapshot to useSyncExternalStore is recreated on every render. ` +
-                `If it returns a new object/array each time, this will cause an infinite loop. ` +
-                `Fix: Wrap the function in useCallback, or ensure it returns a stable reference.`,
+                `If it returns a new object/array each time, this will cause an infinite loop.${confidenceExplanation}`,
+              suggestion: `Wrap '${varName}' with useCallback, or ensure it returns a stable reference.`,
               debugInfo: {
                 reason: `Unstable ${unstableVar.type} '${varName}' used as getSnapshot argument`,
                 stateTracking: {

@@ -183,6 +183,9 @@ describe('Hooks Integration Tests', () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'ref-mutation-example.tsx',
         ignore: [],
+        config: {
+          minConfidence: 'low', // RLD-600 has low confidence, so we need to include it
+        },
       });
 
       // Should find at least one ref mutation issue (RLD-600)
