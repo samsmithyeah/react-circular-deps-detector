@@ -335,9 +335,6 @@ export function analyzeStateInteractions(
   const setterToState = new Map<string, string>();
   stateInfo.forEach((setter, state) => setterToState.set(setter, state));
 
-  // Track ancestor chain for proper conditional analysis
-  const ancestorStack: t.Node[] = [];
-
   // Track functions that are passed as arguments (not invoked)
   const functionsPassedAsArgs = new Set<string>();
 
@@ -346,29 +343,25 @@ export function analyzeStateInteractions(
 
   // First pass: find all functions passed as arguments to known safe receivers
   // AND track async callback nodes (calls to setInterval, onSnapshot, etc. with inline callbacks)
-  function findFunctionReferences(node: t.Node | null | undefined): void {
-    if (!node || typeof node !== 'object') return;
-
-    // Check for calls like: addEventListener('click', handleClick) or obj.addEventListener(...)
-    if (node.type === 'CallExpression') {
+  traverse(hookBody, {
+    noScope: true,
+    CallExpression(path: NodePath<t.CallExpression>) {
+      const node = path.node;
       let receivingFuncName: string | null = null;
 
       // Handle: addEventListener('click', handler)
-      if (node.callee?.type === 'Identifier') {
+      if (t.isIdentifier(node.callee)) {
         receivingFuncName = node.callee.name;
       }
       // Handle: element.addEventListener('click', handler) or window.addEventListener(...)
-      else if (
-        node.callee?.type === 'MemberExpression' &&
-        node.callee.property?.type === 'Identifier'
-      ) {
+      else if (t.isMemberExpression(node.callee) && t.isIdentifier(node.callee.property)) {
         receivingFuncName = node.callee.property.name;
       }
 
       if (receivingFuncName && EVENT_LISTENER_METHODS.has(receivingFuncName)) {
         // Check each argument - if it's an identifier, it's passed as reference
-        for (const arg of node.arguments || []) {
-          if (arg.type === 'Identifier') {
+        for (const arg of node.arguments) {
+          if (t.isIdentifier(arg)) {
             functionsPassedAsArgs.add(arg.name);
             interactions.functionReferences.push({
               functionName: arg.name,
@@ -392,116 +385,131 @@ export function analyzeStateInteractions(
       // e.g., setInterval(() => setCount(...), 1000) or onSnapshot(q, (snapshot) => { ... })
       if (receivingFuncName && ASYNC_CALLBACK_FUNCTIONS.has(receivingFuncName)) {
         // Mark all function arguments (arrow functions, function expressions) as async callbacks
-        for (const arg of node.arguments || []) {
-          if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') {
+        for (const arg of node.arguments) {
+          if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
             asyncCallbackNodes.add(arg);
           }
         }
       }
-    }
+    },
+  });
 
-    // Recursively search
-    const indexableNode = node as unknown as Record<string, unknown>;
-    Object.keys(node).forEach((key) => {
-      const value = indexableNode[key];
-      if (Array.isArray(value)) {
-        value.forEach((child) => findFunctionReferences(child as t.Node | null | undefined));
-      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
-        findFunctionReferences(value as t.Node);
-      }
+  // Helper: check if a path is inside an async callback
+  function isInsideAsyncCallback(path: NodePath): boolean {
+    return path.findParent((p) => asyncCallbackNodes.has(p.node)) !== null;
+  }
+
+  // Helper: get ancestor stack as array of nodes (for analyzeConditionalGuard)
+  function getAncestorStack(path: NodePath): t.Node[] {
+    const ancestors: t.Node[] = [];
+    let current: NodePath | null = path;
+    while (current) {
+      ancestors.push(current.node);
+      current = current.parentPath;
+    }
+    return ancestors;
+  }
+
+  // Helper: check if any identifier in a node references a state variable
+  function nodeReferencesState(node: t.Node): boolean {
+    let found = false;
+    traverse(node, {
+      noScope: true,
+      Identifier(innerPath: NodePath<t.Identifier>) {
+        if (stateNames.includes(innerPath.node.name) && innerPath.isReferencedIdentifier()) {
+          found = true;
+          innerPath.stop();
+        }
+      },
     });
+    return found;
   }
 
-  findFunctionReferences(hookBody);
-
-  // Helper: check if current node is inside an async callback
-  function isInsideAsyncCallback(): boolean {
-    for (const ancestor of ancestorStack) {
-      if (asyncCallbackNodes.has(ancestor)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Create a simple traversal without @babel/traverse to avoid scope issues
-  function visitNode(node: t.Node | null | undefined, parent?: t.Node | null): void {
-    if (!node || typeof node !== 'object') return;
-
-    ancestorStack.push(node);
+  // Main traversal pass
+  traverse(hookBody, {
+    noScope: true,
 
     // Check for function calls (state setters)
-    if (node.type === 'CallExpression' && node.callee && node.callee.type === 'Identifier') {
+    CallExpression(path: NodePath<t.CallExpression>) {
+      const node = path.node;
+      if (!t.isIdentifier(node.callee)) return;
+
       const calleeName = node.callee.name;
+      if (!setterNames.includes(calleeName)) return;
 
-      if (setterNames.includes(calleeName)) {
-        const stateVar = setterToState.get(calleeName);
+      const stateVar = setterToState.get(calleeName);
 
-        // Check if this modification is inside an async callback (deferred)
-        if (isInsideAsyncCallback()) {
-          interactions.deferredModifications.push(calleeName);
-        } else {
-          // Not deferred, so analyze for loop risks
-          const guardAnalysis = analyzeConditionalGuard(
-            node,
-            ancestorStack,
-            calleeName,
-            stateVar,
-            stateNames
-          );
+      // Check if this modification is inside an async callback (deferred)
+      if (isInsideAsyncCallback(path)) {
+        interactions.deferredModifications.push(calleeName);
+      } else {
+        // Not deferred, so analyze for loop risks
+        const guardAnalysis = analyzeConditionalGuard(
+          node,
+          getAncestorStack(path),
+          calleeName,
+          stateVar,
+          stateNames
+        );
 
-          if (guardAnalysis) {
-            interactions.guardedModifications.push(guardAnalysis);
-            if (!guardAnalysis.isSafe) {
-              interactions.conditionalModifications.push(calleeName);
-            }
-          } else {
-            // If we couldn't analyze the guard, treat as a regular modification
-            // The CFG-based analysis will determine if it's truly unconditional
-            interactions.modifications.push(calleeName);
+        if (guardAnalysis) {
+          interactions.guardedModifications.push(guardAnalysis);
+          if (!guardAnalysis.isSafe) {
+            interactions.conditionalModifications.push(calleeName);
           }
-        }
-
-        // Check if it's a functional update (applies to both deferred and non-deferred calls)
-        if (
-          node.arguments &&
-          node.arguments.length > 0 &&
-          (node.arguments[0].type === 'ArrowFunctionExpression' ||
-            node.arguments[0].type === 'FunctionExpression')
-        ) {
-          interactions.functionalUpdates.push(calleeName);
+        } else {
+          // If we couldn't analyze the guard, treat as a regular modification
+          // The CFG-based analysis will determine if it's truly unconditional
+          interactions.modifications.push(calleeName);
         }
       }
-    }
+
+      // Check if it's a functional update (applies to both deferred and non-deferred calls)
+      if (
+        node.arguments.length > 0 &&
+        (t.isArrowFunctionExpression(node.arguments[0]) ||
+          t.isFunctionExpression(node.arguments[0]))
+      ) {
+        interactions.functionalUpdates.push(calleeName);
+      }
+    },
 
     // Check for member expressions (state reads)
-    if (node.type === 'MemberExpression' && node.object && node.object.type === 'Identifier') {
-      const objectName = node.object.name;
-      if (stateNames.includes(objectName)) {
-        interactions.reads.push(objectName);
+    MemberExpression(path: NodePath<t.MemberExpression>) {
+      const node = path.node;
+      if (t.isIdentifier(node.object) && stateNames.includes(node.object.name)) {
+        interactions.reads.push(node.object.name);
       }
-    }
+    },
 
     // Check for identifier references (state reads)
-    if (node.type === 'Identifier' && stateNames.includes(node.name)) {
-      // Only count as read if it's not being assigned to (simplified check)
-      if (!parent || parent.type !== 'AssignmentExpression' || parent.left !== node) {
-        interactions.reads.push(node.name);
-      }
-    }
+    Identifier(path: NodePath<t.Identifier>) {
+      const node = path.node;
+      if (!stateNames.includes(node.name)) return;
+
+      // Only count as read if it's a reference (not a property key, etc.)
+      if (!path.isReferencedIdentifier()) return;
+
+      // Skip if this is the left side of an assignment
+      const parent = path.parent;
+      if (t.isAssignmentExpression(parent) && parent.left === node) return;
+
+      interactions.reads.push(node.name);
+    },
 
     // Check for ref.current mutations (e.g., ref.current = value)
-    if (
-      node.type === 'AssignmentExpression' &&
-      node.left &&
-      node.left.type === 'MemberExpression' &&
-      node.left.object &&
-      node.left.object.type === 'Identifier' &&
-      node.left.property &&
-      node.left.property.type === 'Identifier' &&
-      node.left.property.name === 'current' &&
-      refVars.has(node.left.object.name)
-    ) {
+    AssignmentExpression(path: NodePath<t.AssignmentExpression>) {
+      const node = path.node;
+      if (
+        !t.isMemberExpression(node.left) ||
+        !t.isIdentifier(node.left.object) ||
+        !t.isIdentifier(node.left.property) ||
+        node.left.property.name !== 'current' ||
+        !refVars.has(node.left.object.name)
+      ) {
+        return;
+      }
+
       const refName = node.left.object.name;
       const rightSide = node.right;
 
@@ -509,31 +517,11 @@ export function analyzeStateInteractions(
       let assignedValue: string | undefined;
       let usesStateValue = false;
 
-      if (rightSide.type === 'Identifier') {
+      if (t.isIdentifier(rightSide)) {
         assignedValue = rightSide.name;
         usesStateValue = stateNames.includes(rightSide.name);
       } else {
-        // Check if any identifier in the right side is a state variable
-        const checkForStateVars = (n: t.Node): boolean => {
-          if (n.type === 'Identifier' && stateNames.includes(n.name)) {
-            return true;
-          }
-          const indexable = n as unknown as Record<string, unknown>;
-          for (const key of Object.keys(n)) {
-            const val = indexable[key];
-            if (Array.isArray(val)) {
-              for (const child of val) {
-                if (child && typeof child === 'object' && (child as { type?: string }).type) {
-                  if (checkForStateVars(child as t.Node)) return true;
-                }
-              }
-            } else if (val && typeof val === 'object' && (val as { type?: string }).type) {
-              if (checkForStateVars(val as t.Node)) return true;
-            }
-          }
-          return false;
-        };
-        usesStateValue = checkForStateVars(rightSide);
+        usesStateValue = nodeReferencesState(rightSide);
       }
 
       interactions.refMutations.push({
@@ -542,23 +530,8 @@ export function analyzeStateInteractions(
         usesStateValue,
         line: node.loc?.start.line || 0,
       });
-    }
-
-    // Recursively visit all properties
-    const indexableVisitNode = node as unknown as Record<string, unknown>;
-    Object.keys(node).forEach((key) => {
-      const value = indexableVisitNode[key];
-      if (Array.isArray(value)) {
-        value.forEach((child) => visitNode(child as t.Node | null | undefined, node));
-      } else if (value && typeof value === 'object' && (value as { type?: string }).type) {
-        visitNode(value as t.Node, node);
-      }
-    });
-
-    ancestorStack.pop();
-  }
-
-  visitNode(hookBody);
+    },
+  });
 
   // Remove duplicates
   interactions.reads = [...new Set(interactions.reads)];
