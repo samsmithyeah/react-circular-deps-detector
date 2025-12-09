@@ -24,10 +24,10 @@ export {
   CircularDependency,
 } from './detector';
 
-// Intelligent hooks analysis
+// Intelligent hooks analysis (main entry point)
 export {
-  analyzeHooksIntelligently,
-  IntelligentHookAnalysis,
+  analyzeHooks,
+  HookAnalysis,
   AnalyzerOptions,
   ErrorCode,
   IssueCategory,
@@ -36,7 +36,43 @@ export {
   isConfiguredUnstableHook,
   isConfiguredStableFunction,
   isConfiguredDeferredFunction,
-} from './intelligent-hooks-analyzer';
+} from './orchestrator';
+
+// Analyzer modules (for advanced usage)
+export {
+  extractStateInfo,
+  extractUnstableVariables,
+  UnstableVariable,
+  StateAndRefInfo,
+  StabilityConfig,
+  StabilityCheckContext,
+} from './state-extractor';
+
+export { detectSetStateDuringRender, isInsideSafeContext } from './render-phase-detector';
+
+export {
+  analyzeConditionalGuard,
+  analyzeCondition,
+  checkEarlyReturnPattern,
+} from './guard-analyzer';
+
+export { detectUseEffectWithoutDeps, analyzeStateInteractions } from './effect-analyzer';
+
+export { findHookNodes, analyzeHookNode } from './hook-analyzer';
+
+export { checkUnstableReferences } from './unstable-refs-detector';
+
+// Shared types and utilities
+export {
+  HookNodeInfo,
+  StateInteraction,
+  RefMutation,
+  FunctionReference,
+  GuardedModification,
+  CreateAnalysisParams,
+} from './types';
+
+export { isHookIgnored, containsNode, createAnalysis, usesObjectSpread } from './utils';
 
 // Parser
 export {

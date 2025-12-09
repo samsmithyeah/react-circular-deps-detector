@@ -17,7 +17,7 @@ import {
   detectCircularDependencies,
   loadConfig,
   parseFile,
-  analyzeHooksIntelligently,
+  analyzeHooks,
   createPathResolver,
   type DetectionResults,
   type RcdConfig,
@@ -355,7 +355,7 @@ async function runSingleFileAnalysis(uri: string, content: string): Promise<void
     incrementalCache.updateFile(filePath, content, parsed);
 
     // Run single-file analysis (no cross-file detection)
-    const analysis = analyzeHooksIntelligently([parsed], {
+    const analysis = analyzeHooks([parsed], {
       stableHooks: rldConfig?.stableHooks,
       unstableHooks: rldConfig?.unstableHooks,
       customFunctions: rldConfig?.customFunctions,

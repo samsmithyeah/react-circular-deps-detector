@@ -8,14 +8,14 @@ import {
   CodeActionKind,
   TextEdit,
 } from 'vscode-languageserver';
-import type { IntelligentHookAnalysis, CrossFileCycle } from 'react-loop-detector';
+import type { HookAnalysis, CrossFileCycle } from 'react-loop-detector';
 import { fileUriToPath } from './utils.js';
 
 /**
- * Maps IntelligentHookAnalysis results to LSP Diagnostics
+ * Maps HookAnalysis results to LSP Diagnostics
  */
 export function mapAnalysisToDiagnostics(
-  analysis: IntelligentHookAnalysis[],
+  analysis: HookAnalysis[],
   crossFileCycles: CrossFileCycle[],
   fileUri: string
 ): Diagnostic[] {
@@ -50,7 +50,7 @@ export function mapAnalysisToDiagnostics(
   return diagnostics;
 }
 
-function mapIssueToDiagnostic(issue: IntelligentHookAnalysis): Diagnostic {
+function mapIssueToDiagnostic(issue: HookAnalysis): Diagnostic {
   const severity = mapSeverity(issue.severity, issue.category);
   const line = Math.max(0, issue.line - 1); // LSP is 0-indexed
   const column = issue.column ? Math.max(0, issue.column) : 0;
@@ -131,7 +131,7 @@ function mapSeverity(severity: 'high' | 'medium' | 'low', category: string): Dia
   }
 }
 
-function formatMessage(issue: IntelligentHookAnalysis): string {
+function formatMessage(issue: HookAnalysis): string {
   // Use the explanation from the analysis, but make it more concise for the IDE
   const baseMessage = issue.explanation;
 

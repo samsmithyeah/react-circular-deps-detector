@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { ParsedFile, IntelligentHookAnalysis, PathResolver } from 'react-loop-detector';
+import type { ParsedFile, HookAnalysis, PathResolver } from 'react-loop-detector';
 
 /**
  * Incremental caching layer for the LSP server.
@@ -18,7 +18,7 @@ export class IncrementalCache {
   private parsedFiles: Map<string, ParsedFile> = new Map();
 
   // Analysis results per file
-  private analysisResults: Map<string, IntelligentHookAnalysis[]> = new Map();
+  private analysisResults: Map<string, HookAnalysis[]> = new Map();
 
   // Dependency graph: file -> files it imports
   private dependencies: Map<string, Set<string>> = new Map();
@@ -61,7 +61,7 @@ export class IncrementalCache {
   /**
    * Update analysis results for a file
    */
-  updateAnalysis(filePath: string, results: IntelligentHookAnalysis[]): void {
+  updateAnalysis(filePath: string, results: HookAnalysis[]): void {
     const normalizedPath = this.normalizePath(filePath);
     this.analysisResults.set(normalizedPath, results);
   }
@@ -76,7 +76,7 @@ export class IncrementalCache {
   /**
    * Get cached analysis results for a file
    */
-  getAnalysis(filePath: string): IntelligentHookAnalysis[] | undefined {
+  getAnalysis(filePath: string): HookAnalysis[] | undefined {
     return this.analysisResults.get(this.normalizePath(filePath));
   }
 
@@ -90,8 +90,8 @@ export class IncrementalCache {
   /**
    * Get all cached analysis results
    */
-  getAllAnalysis(): IntelligentHookAnalysis[] {
-    const allResults: IntelligentHookAnalysis[] = [];
+  getAllAnalysis(): HookAnalysis[] {
+    const allResults: HookAnalysis[] = [];
     for (const results of this.analysisResults.values()) {
       allResults.push(...results);
     }

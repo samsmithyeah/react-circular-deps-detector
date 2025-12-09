@@ -8,7 +8,7 @@ import chokidar from 'chokidar';
 import { codeFrameColumns } from '@babel/code-frame';
 import { detectCircularDependencies, DetectionResults, CircularDependency } from './detector';
 import { CrossFileCycle } from './module-graph';
-import { IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
+import { HookAnalysis } from './orchestrator';
 
 interface CliOptions {
   pattern: string;
@@ -389,7 +389,7 @@ program
     }
   });
 
-function displayCompactIssue(issue: IntelligentHookAnalysis) {
+function displayCompactIssue(issue: HookAnalysis) {
   const relPath = path.relative(process.cwd(), issue.file);
   const col = issue.column ?? 0;
   const level =
@@ -409,7 +409,7 @@ function displayCompactIssue(issue: IntelligentHookAnalysis) {
   );
 }
 
-function displayDebugInfo(issue: IntelligentHookAnalysis) {
+function displayDebugInfo(issue: HookAnalysis) {
   if (!issue.debugInfo) return;
 
   const debug = issue.debugInfo;
@@ -461,7 +461,7 @@ function displayDebugInfo(issue: IntelligentHookAnalysis) {
   console.log();
 }
 
-function displayIntelligentIssue(issue: IntelligentHookAnalysis, showDebug?: boolean) {
+function displayIssue(issue: HookAnalysis, showDebug?: boolean) {
   // Show location
   console.log(chalk.blue(`    📍 Location:`));
   console.log(chalk.gray(`       ${path.relative(process.cwd(), issue.file)}:${issue.line}`));
@@ -661,7 +661,7 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
         );
         console.log();
 
-        displayIntelligentIssue(issue, debug);
+        displayIssue(issue, debug);
       });
     }
 
@@ -684,7 +684,7 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
         );
         console.log();
 
-        displayIntelligentIssue(issue, debug);
+        displayIssue(issue, debug);
       });
     }
 
@@ -701,7 +701,7 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
         console.log(chalk.cyan(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`));
         console.log();
 
-        displayIntelligentIssue(issue, debug);
+        displayIssue(issue, debug);
       });
     }
   }

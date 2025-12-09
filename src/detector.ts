@@ -6,7 +6,7 @@ import micromatch from 'micromatch';
 import Piscina from 'piscina';
 import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
-import { analyzeHooksIntelligently, IntelligentHookAnalysis } from './intelligent-hooks-analyzer';
+import { analyzeHooks, HookAnalysis } from './orchestrator';
 import { loadConfig, RcdConfig, severityLevel, confidenceLevel, DEFAULT_CONFIG } from './config';
 import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
@@ -21,7 +21,7 @@ export interface CircularDependency {
 export interface DetectionResults {
   circularDependencies: CircularDependency[];
   crossFileCycles: CrossFileCycle[];
-  intelligentHooksAnalysis: IntelligentHookAnalysis[];
+  intelligentHooksAnalysis: HookAnalysis[];
   summary: {
     filesAnalyzed: number;
     hooksAnalyzed: number;
@@ -96,7 +96,7 @@ export async function detectCircularDependencies(
   ];
 
   // Run intelligent hooks analysis (consolidated single analyzer)
-  const rawAnalysis = analyzeHooksIntelligently(parsedFiles, {
+  const rawAnalysis = analyzeHooks(parsedFiles, {
     stableHooks: config.stableHooks,
     unstableHooks: config.unstableHooks,
     customFunctions: config.customFunctions,
