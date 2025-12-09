@@ -26,6 +26,7 @@ interface CliOptions {
   cache?: boolean;
   strict?: boolean;
   tsconfigPath?: string;
+  presets?: boolean; // Commander turns --no-presets into presets: false
 }
 
 // SARIF output types
@@ -321,6 +322,7 @@ program
     'Enable TypeScript strict mode for type-based stability detection (slower but more accurate)'
   )
   .option('--tsconfig <path>', 'Path to tsconfig.json (for --strict mode)')
+  .option('--no-presets', 'Disable auto-detection of library presets from package.json')
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -362,6 +364,7 @@ program
           includePotentialIssues: !options.confirmedOnly,
           strictMode: options.strict,
           tsconfigPath: options.tsconfigPath,
+          noPresets: options.presets === false, // --no-presets becomes presets: false
         },
       });
 
