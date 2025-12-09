@@ -3,6 +3,7 @@ import traverse, { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import * as fs from 'fs';
 import { AstCache, CacheableParsedData } from './cache';
+import { isMemoCallExpression } from './utils';
 
 export interface HookInfo {
   name: string;
@@ -109,15 +110,7 @@ export function parseFile(filePath: string): ParsedFile {
       }
 
       // Detect memo() and React.memo() calls
-      const isMemoCall =
-        (t.isIdentifier(callee) && callee.name === 'memo') ||
-        (t.isMemberExpression(callee) &&
-          t.isIdentifier(callee.object) &&
-          callee.object.name === 'React' &&
-          t.isIdentifier(callee.property) &&
-          callee.property.name === 'memo');
-
-      if (isMemoCall) {
+      if (isMemoCallExpression(path.node)) {
         const parent = path.parent;
         if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           memoizedComponents.add(parent.id.name);
@@ -379,22 +372,6 @@ function extractNamedExports(
   }
 
   return exports;
-}
-
-/**
- * Check if a node is a memo() or React.memo() call expression
- */
-function isMemoCallExpression(node: t.Node | null | undefined): boolean {
-  if (!node || !t.isCallExpression(node)) return false;
-  const callee = node.callee;
-  return (
-    (t.isIdentifier(callee) && callee.name === 'memo') ||
-    (t.isMemberExpression(callee) &&
-      t.isIdentifier(callee.object) &&
-      callee.object.name === 'React' &&
-      t.isIdentifier(callee.property) &&
-      callee.property.name === 'memo')
-  );
 }
 
 function extractDefaultExport(

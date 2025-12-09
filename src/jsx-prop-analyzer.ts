@@ -13,10 +13,11 @@
  */
 
 import * as t from '@babel/types';
+import * as path from 'path';
 import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis } from './types';
 import { UnstableVariable } from './state-extractor';
-import { createAnalysis } from './utils';
+import { createAnalysis, isMemoCallExpression } from './utils';
 import { ImportInfo, ParsedFile } from './parser';
 
 /** Information about a JSX prop with an unstable value */
@@ -37,18 +38,9 @@ function findLocalMemoizedComponents(ast: t.Node): Set<string> {
 
   traverse(ast, {
     noScope: true,
-    CallExpression(path: NodePath<t.CallExpression>) {
-      const callee = path.node.callee;
-      const isMemoCall =
-        (t.isIdentifier(callee) && callee.name === 'memo') ||
-        (t.isMemberExpression(callee) &&
-          t.isIdentifier(callee.object) &&
-          callee.object.name === 'React' &&
-          t.isIdentifier(callee.property) &&
-          callee.property.name === 'memo');
-
-      if (isMemoCall) {
-        const parent = path.parent;
+    CallExpression(nodePath: NodePath<t.CallExpression>) {
+      if (isMemoCallExpression(nodePath.node)) {
+        const parent = nodePath.parent;
         if (t.isVariableDeclarator(parent) && t.isIdentifier(parent.id)) {
           memoizedComponents.add(parent.id.name);
         }
@@ -90,26 +82,19 @@ function isComponentMemoized(
   for (const imp of imports) {
     if (!imp.imports.includes(componentName)) continue;
 
-    // Resolve the import path to find the source file
-    // Import source is relative (e.g., "./Button" or "../components/Button")
-    const sourceFile = allParsedFiles.find((f) => {
-      // Normalize paths for comparison
-      // The import source might be "./Button" and file might be "/path/to/Button.tsx"
-      const normalizedSource = imp.source.replace(/^\.\//, '').replace(/\.\.\//g, '');
-      const normalizedFile = f.file;
+    // Resolve the import path relative to the current file
+    const currentDir = path.dirname(currentFilePath);
+    const resolvedImportPath = path.resolve(currentDir, imp.source);
 
-      // Check if the file path ends with the import source (with various extensions)
-      const extensions = ['', '.ts', '.tsx', '.js', '.jsx'];
-      for (const ext of extensions) {
-        if (
-          normalizedFile.endsWith(`/${normalizedSource}${ext}`) ||
-          normalizedFile.endsWith(`/${normalizedSource}/index${ext}`)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    });
+    // Build list of possible file paths (with different extensions)
+    const extensions = ['', '.ts', '.tsx', '.js', '.jsx'];
+    const possiblePaths = extensions.flatMap((ext) => [
+      `${resolvedImportPath}${ext}`,
+      path.join(resolvedImportPath, `index${ext}`),
+    ]);
+
+    // Find the matching source file
+    const sourceFile = allParsedFiles.find((f) => possiblePaths.includes(f.file));
 
     if (!sourceFile) continue;
 
