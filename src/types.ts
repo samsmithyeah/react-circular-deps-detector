@@ -27,6 +27,9 @@ export type ErrorCode =
   | 'RLD-401' // Unstable array reference in deps
   | 'RLD-402' // Unstable function reference in deps
   | 'RLD-403' // Unstable function call result in deps
+  | 'RLD-404' // Unstable context provider value
+  | 'RLD-405' // Unstable JSX prop
+  | 'RLD-406' // Unstable callback in useCallback deps (dependency chain)
   | 'RLD-410' // Object spread guard risk
   | 'RLD-420' // useCallback/useMemo modifies dependency (no direct loop but review)
   | 'RLD-500' // useEffect missing dependency array

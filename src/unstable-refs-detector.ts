@@ -18,6 +18,32 @@ import { isHookIgnored, createAnalysis } from './utils';
 import { hasUnconditionalSetStateCFG } from './control-flow';
 
 /**
+ * Find an unstable variable by name, checking component-scoped keys.
+ * The hook line is used to determine which component the variable belongs to.
+ */
+function findUnstableVar(
+  unstableVars: Map<string, UnstableVariable>,
+  varName: string,
+  hookLine: number
+): UnstableVariable | undefined {
+  // First try to find a variable in a component that contains this hook (by line range)
+  for (const unstableVar of unstableVars.values()) {
+    if (
+      unstableVar.name === varName &&
+      unstableVar.componentStartLine !== undefined &&
+      unstableVar.componentEndLine !== undefined &&
+      hookLine >= unstableVar.componentStartLine &&
+      hookLine <= unstableVar.componentEndLine
+    ) {
+      return unstableVar;
+    }
+  }
+
+  // Fall back to non-component-scoped lookup (for backwards compatibility)
+  return unstableVars.get(varName);
+}
+
+/**
  * Check if a hook has unstable references in its dependency array.
  * Returns an analysis if an issue is found, null otherwise.
  */
@@ -66,8 +92,8 @@ export function checkUnstableReferences(
     // Skip if it's a state variable (managed by React, stable reference within render)
     if (stateInfo.has(depName)) continue;
 
-    // Check if this dependency is an unstable variable
-    const unstableVar = unstableVars.get(depName);
+    // Check if this dependency is an unstable variable (using component-scoped lookup)
+    const unstableVar = findUnstableVar(unstableVars, depName, line);
     if (unstableVar) {
       const typeDescriptions: Record<string, string> = {
         object: 'object literal',
