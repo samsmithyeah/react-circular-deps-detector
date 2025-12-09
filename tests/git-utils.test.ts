@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 import {
   isGitRepository,
   getGitRoot,
@@ -8,8 +9,25 @@ import {
   isValidGitRef,
 } from '../src/git-utils';
 
+/**
+ * Check if we have enough git history for tests that require it.
+ * GitHub Actions uses shallow clones by default, which don't have full history.
+ */
+function hasGitHistory(ref: string, cwd: string): boolean {
+  try {
+    execSync(`git rev-parse --verify ${ref}`, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe('Git Utils', () => {
   const projectRoot = path.resolve(__dirname, '..');
+  const hasFullHistory = hasGitHistory('HEAD~1', projectRoot);
 
   describe('isGitRepository', () => {
     it('should return true for a git repository', () => {
@@ -41,8 +59,12 @@ describe('Git Utils', () => {
   });
 
   describe('isValidGitRef', () => {
-    it('should return true for valid refs', () => {
+    it('should return true for HEAD', () => {
       expect(isValidGitRef('HEAD', projectRoot)).toBe(true);
+    });
+
+    // This test requires git history - skip in shallow clones
+    (hasFullHistory ? it : it.skip)('should return true for HEAD~1 (requires git history)', () => {
       expect(isValidGitRef('HEAD~1', projectRoot)).toBe(true);
     });
 
@@ -52,22 +74,26 @@ describe('Git Utils', () => {
   });
 
   describe('getChangedFilesSinceRef', () => {
-    it('should return changed files since HEAD~1', () => {
-      const result = getChangedFilesSinceRef({
-        since: 'HEAD~1',
-        cwd: projectRoot,
-      });
+    // Tests that require git history - skip in shallow clones (CI)
+    (hasFullHistory ? it : it.skip)(
+      'should return changed files since HEAD~1 (requires git history)',
+      () => {
+        const result = getChangedFilesSinceRef({
+          since: 'HEAD~1',
+          cwd: projectRoot,
+        });
 
-      expect(result.isGitRepo).toBe(true);
-      expect(result.baseRef).toBe('HEAD~1');
-      expect(Array.isArray(result.changedFiles)).toBe(true);
-      // All returned files should be absolute paths
-      for (const file of result.changedFiles) {
-        expect(path.isAbsolute(file)).toBe(true);
+        expect(result.isGitRepo).toBe(true);
+        expect(result.baseRef).toBe('HEAD~1');
+        expect(Array.isArray(result.changedFiles)).toBe(true);
+        // All returned files should be absolute paths
+        for (const file of result.changedFiles) {
+          expect(path.isAbsolute(file)).toBe(true);
+        }
       }
-    });
+    );
 
-    it('should filter by extension', () => {
+    (hasFullHistory ? it : it.skip)('should filter by extension (requires git history)', () => {
       const result = getChangedFilesSinceRef({
         since: 'HEAD~5',
         cwd: projectRoot,
@@ -99,34 +125,42 @@ describe('Git Utils', () => {
       ).toThrow('Invalid git reference');
     });
 
-    it('should only return files that exist', () => {
-      const result = getChangedFilesSinceRef({
-        since: 'HEAD~5',
-        cwd: projectRoot,
-      });
+    (hasFullHistory ? it : it.skip)(
+      'should only return files that exist (requires git history)',
+      () => {
+        const result = getChangedFilesSinceRef({
+          since: 'HEAD~5',
+          cwd: projectRoot,
+        });
 
-      // All returned files should exist
-      for (const file of result.changedFiles) {
-        expect(fs.existsSync(file)).toBe(true);
+        // All returned files should exist
+        for (const file of result.changedFiles) {
+          expect(fs.existsSync(file)).toBe(true);
+        }
       }
-    });
+    );
   });
 });
 
 describe('Detector with --since option', () => {
   const { detectCircularDependencies } = require('../src/detector');
   const projectRoot = path.resolve(__dirname, '..');
+  const hasFullHistory = hasGitHistory('HEAD~1', projectRoot);
 
-  it('should analyze only changed files when --since is provided', async () => {
-    const result = await detectCircularDependencies(projectRoot, {
-      pattern: '**/*.{ts,tsx}',
-      ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
-      since: 'HEAD~3',
-    });
+  // Tests that require git history - skip in shallow clones (CI)
+  (hasFullHistory ? it : it.skip)(
+    'should analyze only changed files when --since is provided (requires git history)',
+    async () => {
+      const result = await detectCircularDependencies(projectRoot, {
+        pattern: '**/*.{ts,tsx}',
+        ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
+        since: 'HEAD~3',
+      });
 
-    // Should complete without errors
-    expect(result.summary.filesAnalyzed).toBeGreaterThanOrEqual(0);
-  });
+      // Should complete without errors
+      expect(result.summary.filesAnalyzed).toBeGreaterThanOrEqual(0);
+    }
+  );
 
   it('should throw error when --since is used in non-git directory', async () => {
     await expect(
@@ -138,26 +172,29 @@ describe('Detector with --since option', () => {
     ).rejects.toThrow('is not inside a git repository');
   });
 
-  it('should include dependent files when --include-dependents is true', async () => {
-    // First run without dependents
-    const withoutDependents = await detectCircularDependencies(projectRoot, {
-      pattern: '**/*.ts',
-      ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
-      since: 'HEAD~3',
-      includeDependents: false,
-    });
+  (hasFullHistory ? it : it.skip)(
+    'should include dependent files when --include-dependents is true (requires git history)',
+    async () => {
+      // First run without dependents
+      const withoutDependents = await detectCircularDependencies(projectRoot, {
+        pattern: '**/*.ts',
+        ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
+        since: 'HEAD~3',
+        includeDependents: false,
+      });
 
-    // Then run with dependents
-    const withDependents = await detectCircularDependencies(projectRoot, {
-      pattern: '**/*.ts',
-      ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
-      since: 'HEAD~3',
-      includeDependents: true,
-    });
+      // Then run with dependents
+      const withDependents = await detectCircularDependencies(projectRoot, {
+        pattern: '**/*.ts',
+        ignore: ['**/node_modules/**', '**/dist/**', '**/tests/**'],
+        since: 'HEAD~3',
+        includeDependents: true,
+      });
 
-    // With dependents should analyze >= files than without
-    expect(withDependents.summary.filesAnalyzed).toBeGreaterThanOrEqual(
-      withoutDependents.summary.filesAnalyzed
-    );
-  });
+      // With dependents should analyze >= files than without
+      expect(withDependents.summary.filesAnalyzed).toBeGreaterThanOrEqual(
+        withoutDependents.summary.filesAnalyzed
+      );
+    }
+  );
 });

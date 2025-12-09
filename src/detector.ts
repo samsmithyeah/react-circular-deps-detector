@@ -17,6 +17,7 @@ import {
 import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
 import { getChangedFilesSinceRef } from './git-utils';
+import { createPathResolver } from './path-resolver';
 
 export interface CircularDependency {
   file: string;
@@ -483,22 +484,7 @@ function findFilesImportingChangedFiles(
   changedFiles: Set<string>,
   projectRoot: string
 ): string[] {
-  const { createPathResolver } = require('./path-resolver');
   const pathResolver = createPathResolver({ projectRoot });
-
-  // Build a set of basenames and directory names for quick matching
-  const changedBasenames = new Set<string>();
-  const changedDirBases = new Map<string, string>(); // dirname -> full path
-
-  for (const file of changedFiles) {
-    const basename = path.basename(file, path.extname(file));
-    changedBasenames.add(basename);
-
-    // Also track the directory relationship
-    const dirName = path.dirname(file);
-    changedDirBases.set(path.basename(dirName) + '/' + basename, file);
-  }
-
   const dependentFiles: string[] = [];
 
   // Regex to match import statements
