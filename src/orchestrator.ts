@@ -37,6 +37,7 @@ import { detectSetStateDuringRender } from './render-phase-detector';
 import { detectUseEffectWithoutDeps, buildLocalFunctionSetterMap } from './effect-analyzer';
 import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
+import { analyzeJsxProps } from './jsx-prop-analyzer';
 import { setCurrentOptions } from './utils';
 
 // Re-export types for backward compatibility
@@ -188,6 +189,10 @@ function analyzeFileIntelligently(
     // Check for useEffect without dependency array
     const noDepsIssues = detectUseEffectWithoutDeps(ast, stateInfo, file.file, file.content);
     results.push(...noDepsIssues);
+
+    // Check for unstable props passed to JSX elements (including Context.Provider)
+    const jsxPropIssues = analyzeJsxProps(ast, unstableVars, file.file);
+    results.push(...jsxPropIssues);
 
     // Build map of local functions to the setters they call (for indirect modification detection)
     const localFunctionSetters = buildLocalFunctionSetterMap(ast, stateInfo);

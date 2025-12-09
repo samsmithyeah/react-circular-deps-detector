@@ -24,6 +24,12 @@ export interface UnstableVariable {
   isMemoized: boolean;
   /** True if defined at module level (outside component) */
   isModuleLevel: boolean;
+  /** Name of the component that contains this variable (for per-component scoping) */
+  componentName?: string;
+  /** Start line of the component that contains this variable */
+  componentStartLine?: number;
+  /** End line of the component that contains this variable */
+  componentEndLine?: number;
 }
 
 export interface StateAndRefInfo {
@@ -379,6 +385,13 @@ export function extractIdentifiersFromPattern(pattern: t.LVal): string[] {
   return identifiers;
 }
 
+/** Component boundary information for unstable variable tracking */
+interface ComponentBoundaryInfo {
+  name: string;
+  startLine: number;
+  endLine: number;
+}
+
 /**
  * Check if an initializer is an unstable source and add all destructured identifiers
  * to the unstable variables map if so.
@@ -390,7 +403,8 @@ export function addUnstableDestructuredVariables(
   unstableVars: Map<string, UnstableVariable>,
   filePath?: string,
   typeChecker?: TypeChecker | null,
-  config?: StabilityConfig
+  config?: StabilityConfig,
+  componentBoundary?: ComponentBoundaryInfo
 ): void {
   if (!init) return;
 
@@ -403,12 +417,16 @@ export function addUnstableDestructuredVariables(
   if (isUnstableSource) {
     const varType = getUnstableVarType(init);
     for (const name of extractIdentifiersFromPattern(id)) {
-      unstableVars.set(name, {
+      const key = componentBoundary ? `${componentBoundary.name}:${name}` : name;
+      unstableVars.set(key, {
         name,
         type: varType,
         line,
         isMemoized: false,
-        isModuleLevel: false,
+        isModuleLevel: !componentBoundary,
+        componentName: componentBoundary?.name,
+        componentStartLine: componentBoundary?.startLine,
+        componentEndLine: componentBoundary?.endLine,
       });
     }
   }
@@ -527,6 +545,13 @@ export function extractStateInfo(ast: t.Node): StateAndRefInfo {
  * @param typeChecker - Optional TypeScript type checker for strict mode
  * @param config - Optional stability configuration
  */
+/** Component boundary information */
+interface ComponentBoundary {
+  name: string;
+  startLine: number;
+  endLine: number;
+}
+
 export function extractUnstableVariables(
   ast: t.Node,
   filePath?: string,
@@ -534,13 +559,29 @@ export function extractUnstableVariables(
   config?: StabilityConfig
 ): Map<string, UnstableVariable> {
   const unstableVars = new Map<string, UnstableVariable>();
-  const memoizedVars = new Set<string>();
+  // Track memoized vars per component (key: "componentName:varName" or just "varName" for module level)
+  const memoizedVars = new Map<string, Set<string>>();
   const stateVars = new Set<string>();
   const refVars = new Set<string>();
 
-  // Track which function scopes we're in
-  let componentDepth = 0;
+  // Track which function scopes we're in - now as a stack to handle nesting
+  const componentStack: ComponentBoundary[] = [];
   const moduleLevelVars = new Set<string>();
+
+  // Helper to get current component info
+  const getCurrentComponent = (): ComponentBoundary | undefined => {
+    return componentStack.length > 0 ? componentStack[componentStack.length - 1] : undefined;
+  };
+
+  // Helper to mark a variable as memoized in current scope
+  const markMemoizedInCurrentScope = (varName: string): void => {
+    const currentComp = getCurrentComponent();
+    const key = currentComp?.name ?? '__module__';
+    if (!memoizedVars.has(key)) {
+      memoizedVars.set(key, new Set());
+    }
+    memoizedVars.get(key)!.add(varName);
+  };
 
   traverse(ast, {
     // Track function component boundaries
@@ -549,13 +590,17 @@ export function extractUnstableVariables(
         // Check if this looks like a React component (PascalCase name)
         const name = nodePath.node.id?.name;
         if (name && /^[A-Z]/.test(name)) {
-          componentDepth++;
+          componentStack.push({
+            name,
+            startLine: nodePath.node.loc?.start.line || 0,
+            endLine: nodePath.node.loc?.end.line || 0,
+          });
         }
       },
       exit(nodePath: NodePath<t.FunctionDeclaration>) {
         const name = nodePath.node.id?.name;
         if (name && /^[A-Z]/.test(name)) {
-          componentDepth--;
+          componentStack.pop();
         }
       },
     },
@@ -616,7 +661,8 @@ export function extractUnstableVariables(
         }
 
         // Inside component: destructuring from unstable source
-        if (componentDepth > 0) {
+        const currentComp = getCurrentComponent();
+        if (currentComp) {
           addUnstableDestructuredVariables(
             id,
             init,
@@ -624,7 +670,8 @@ export function extractUnstableVariables(
             unstableVars,
             filePath,
             typeChecker,
-            config
+            config,
+            currentComp
           );
         }
         return;
@@ -681,7 +728,8 @@ export function extractUnstableVariables(
         }
 
         // Inside component: destructuring from unstable source
-        if (componentDepth > 0) {
+        const objCurrentComp = getCurrentComponent();
+        if (objCurrentComp) {
           addUnstableDestructuredVariables(
             id,
             init,
@@ -689,7 +737,8 @@ export function extractUnstableVariables(
             unstableVars,
             filePath,
             typeChecker,
-            config
+            config,
+            objCurrentComp
           );
         }
         return;
@@ -733,77 +782,91 @@ export function extractUnstableVariables(
             (callee.property.name === 'useMemo' || callee.property.name === 'useCallback'));
 
         if (isMemoHook) {
-          memoizedVars.add(varName);
+          markMemoizedInCurrentScope(varName);
           return;
         }
       }
 
       // Track module-level variables (before any component function)
-      if (componentDepth === 0) {
+      const simpleCurrentComp = getCurrentComponent();
+      if (!simpleCurrentComp) {
         moduleLevelVars.add(varName);
         return;
       }
 
       // Now check for unstable patterns inside components
-      if (componentDepth > 0) {
-        // Object literal: const obj = { ... }
-        if (t.isObjectExpression(init)) {
-          unstableVars.set(varName, {
-            name: varName,
-            type: 'object',
-            line,
-            isMemoized: false,
-            isModuleLevel: false,
-          });
+      // Object literal: const obj = { ... }
+      if (t.isObjectExpression(init)) {
+        unstableVars.set(`${simpleCurrentComp.name}:${varName}`, {
+          name: varName,
+          type: 'object',
+          line,
+          isMemoized: false,
+          isModuleLevel: false,
+          componentName: simpleCurrentComp.name,
+          componentStartLine: simpleCurrentComp.startLine,
+          componentEndLine: simpleCurrentComp.endLine,
+        });
+      }
+      // Array literal: const arr = [...]
+      else if (t.isArrayExpression(init)) {
+        unstableVars.set(`${simpleCurrentComp.name}:${varName}`, {
+          name: varName,
+          type: 'array',
+          line,
+          isMemoized: false,
+          isModuleLevel: false,
+          componentName: simpleCurrentComp.name,
+          componentStartLine: simpleCurrentComp.startLine,
+          componentEndLine: simpleCurrentComp.endLine,
+        });
+      }
+      // Arrow function: const fn = () => ...
+      else if (t.isArrowFunctionExpression(init)) {
+        unstableVars.set(`${simpleCurrentComp.name}:${varName}`, {
+          name: varName,
+          type: 'function',
+          line,
+          isMemoized: false,
+          isModuleLevel: false,
+          componentName: simpleCurrentComp.name,
+          componentStartLine: simpleCurrentComp.startLine,
+          componentEndLine: simpleCurrentComp.endLine,
+        });
+      }
+      // Function expression: const fn = function() ...
+      else if (t.isFunctionExpression(init)) {
+        unstableVars.set(`${simpleCurrentComp.name}:${varName}`, {
+          name: varName,
+          type: 'function',
+          line,
+          isMemoized: false,
+          isModuleLevel: false,
+          componentName: simpleCurrentComp.name,
+          componentStartLine: simpleCurrentComp.startLine,
+          componentEndLine: simpleCurrentComp.endLine,
+        });
+      }
+      // Function call that likely returns new object/array: const config = createConfig()
+      else if (t.isCallExpression(init)) {
+        // Skip stable function calls (React hooks, parseInt, etc.)
+        const callContext: StabilityCheckContext | undefined = filePath
+          ? { filePath, line }
+          : undefined;
+        if (isStableFunctionCall(init, callContext, typeChecker, config)) {
+          return;
         }
-        // Array literal: const arr = [...]
-        else if (t.isArrayExpression(init)) {
-          unstableVars.set(varName, {
-            name: varName,
-            type: 'array',
-            line,
-            isMemoized: false,
-            isModuleLevel: false,
-          });
-        }
-        // Arrow function: const fn = () => ...
-        else if (t.isArrowFunctionExpression(init)) {
-          unstableVars.set(varName, {
-            name: varName,
-            type: 'function',
-            line,
-            isMemoized: false,
-            isModuleLevel: false,
-          });
-        }
-        // Function expression: const fn = function() ...
-        else if (t.isFunctionExpression(init)) {
-          unstableVars.set(varName, {
-            name: varName,
-            type: 'function',
-            line,
-            isMemoized: false,
-            isModuleLevel: false,
-          });
-        }
-        // Function call that likely returns new object/array: const config = createConfig()
-        else if (t.isCallExpression(init)) {
-          // Skip stable function calls (React hooks, parseInt, etc.)
-          const callContext: StabilityCheckContext | undefined = filePath
-            ? { filePath, line }
-            : undefined;
-          if (isStableFunctionCall(init, callContext, typeChecker, config)) {
-            return;
-          }
-          // Other function calls may return new objects
-          unstableVars.set(varName, {
-            name: varName,
-            type: 'function-call',
-            line,
-            isMemoized: false,
-            isModuleLevel: false,
-          });
-        }
+        // Other function calls may return new objects
+        unstableVars.set(`${simpleCurrentComp.name}:${varName}`, {
+          name: varName,
+          type: 'function-call',
+          line,
+          isMemoized: false,
+          isModuleLevel: false,
+          componentName: simpleCurrentComp.name,
+          componentStartLine: simpleCurrentComp.startLine,
+          componentEndLine: simpleCurrentComp.endLine,
+        });
       }
     },
 
@@ -817,7 +880,11 @@ export function extractUnstableVariables(
           t.isIdentifier(parent.id) &&
           /^[A-Z]/.test(parent.id.name)
         ) {
-          componentDepth++;
+          componentStack.push({
+            name: parent.id.name,
+            startLine: nodePath.node.loc?.start.line || 0,
+            endLine: nodePath.node.loc?.end.line || 0,
+          });
         }
       },
       exit(nodePath: NodePath<t.ArrowFunctionExpression>) {
@@ -827,7 +894,7 @@ export function extractUnstableVariables(
           t.isIdentifier(parent.id) &&
           /^[A-Z]/.test(parent.id.name)
         ) {
-          componentDepth--;
+          componentStack.pop();
         }
       },
     },
@@ -842,7 +909,11 @@ export function extractUnstableVariables(
           t.isIdentifier(parent.id) &&
           /^[A-Z]/.test(parent.id.name)
         ) {
-          componentDepth++;
+          componentStack.push({
+            name: parent.id.name,
+            startLine: nodePath.node.loc?.start.line || 0,
+            endLine: nodePath.node.loc?.end.line || 0,
+          });
         }
       },
       exit(nodePath: NodePath<t.FunctionExpression>) {
@@ -852,24 +923,47 @@ export function extractUnstableVariables(
           t.isIdentifier(parent.id) &&
           /^[A-Z]/.test(parent.id.name)
         ) {
-          componentDepth--;
+          componentStack.pop();
         }
       },
     },
   });
 
   // Remove any variables that are actually memoized, state, refs, or module-level
-  for (const memoized of memoizedVars) {
-    unstableVars.delete(memoized);
+  // Since keys now include component name, we need to check each unstable var
+  const keysToDelete: string[] = [];
+
+  for (const [key, unstableVar] of unstableVars) {
+    const varName = unstableVar.name;
+    const componentName = unstableVar.componentName;
+
+    // Check if memoized in this component's scope
+    if (componentName && memoizedVars.get(componentName)?.has(varName)) {
+      keysToDelete.push(key);
+      continue;
+    }
+
+    // Check if it's a state var
+    if (stateVars.has(varName)) {
+      keysToDelete.push(key);
+      continue;
+    }
+
+    // Check if it's a ref var
+    if (refVars.has(varName)) {
+      keysToDelete.push(key);
+      continue;
+    }
+
+    // Check if it's a module-level var (shouldn't happen as we don't add those, but just in case)
+    if (moduleLevelVars.has(varName)) {
+      keysToDelete.push(key);
+      continue;
+    }
   }
-  for (const stateVar of stateVars) {
-    unstableVars.delete(stateVar);
-  }
-  for (const refVar of refVars) {
-    unstableVars.delete(refVar);
-  }
-  for (const moduleVar of moduleLevelVars) {
-    unstableVars.delete(moduleVar);
+
+  for (const key of keysToDelete) {
+    unstableVars.delete(key);
   }
 
   return unstableVars;

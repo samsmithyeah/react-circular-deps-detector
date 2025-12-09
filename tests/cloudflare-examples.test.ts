@@ -589,14 +589,17 @@ describe('Cloudflare-style infinite loop examples', () => {
   });
 
   /**
-   * The following tests are for patterns that SHOULD ideally be detected
-   * but require more complex analysis that isn't implemented yet.
-   * These are skipped to document the desired behavior for future implementation.
+   * Advanced patterns that require more complex analysis:
+   * - Per-component scoping of unstable variables
+   * - Cross-component prop tracking
+   * - useCallback dependency chain tracking
+   * - Context provider value detection
+   * - Inline function prop detection for memoized children
    */
-  describe('Future improvements (skipped)', () => {
-    // This requires per-component scoping of unstable variables
-    // Currently fails when multiple components in the same file have variables with the same name
-    it.skip('should handle multiple components with same variable name in one file', async () => {
+  describe('Advanced analysis patterns', () => {
+    // Per-component scoping of unstable variables - handles multiple components
+    // with the same variable name in one file correctly
+    it('should handle multiple components with same variable name in one file', async () => {
       const testFile = path.join(tempDir, 'MultipleComponents.tsx');
       fs.writeFileSync(
         testFile,
@@ -649,8 +652,8 @@ describe('Cloudflare-style infinite loop examples', () => {
       expect(issues[0].line).toBeLessThan(20); // BuggyComponent is first
     });
 
-    // This requires cross-component prop tracking
-    it.skip('should detect unstable object prop passed to child causing child effect loop', async () => {
+    // Cross-component prop tracking - detects unstable props passed to child components
+    it('should detect unstable object prop passed to child causing child effect loop', async () => {
       const testFile = path.join(tempDir, 'CrossComponentProp.tsx');
       fs.writeFileSync(
         testFile,
@@ -695,8 +698,8 @@ describe('Cloudflare-style infinite loop examples', () => {
       expect(issues.length).toBeGreaterThan(0);
     });
 
-    // This requires tracking useCallback dependencies through to useEffect
-    it.skip('should detect useCallback with unstable dep causing useEffect loop', async () => {
+    // useCallback dependency chain - detects unstable deps that make the callback unstable
+    it('should detect useCallback with unstable dep causing useEffect loop', async () => {
       const testFile = path.join(tempDir, 'UseCallbackChain.tsx');
       fs.writeFileSync(
         testFile,
@@ -741,8 +744,8 @@ describe('Cloudflare-style infinite loop examples', () => {
       expect(relevantIssue).toBe(true);
     });
 
-    // This requires understanding React Context API
-    it.skip('should detect unstable context provider value', async () => {
+    // Context provider value detection - detects unstable values in Context.Provider
+    it('should detect unstable context provider value', async () => {
       const testFile = path.join(tempDir, 'ContextValueLoop.tsx');
       fs.writeFileSync(
         testFile,
@@ -782,8 +785,8 @@ describe('Cloudflare-style infinite loop examples', () => {
       expect(issues.length).toBeGreaterThan(0);
     });
 
-    // This requires tracking inline function props to memoized children
-    it.skip('should detect inline function prop breaking React.memo', async () => {
+    // Inline function prop detection - detects unstable functions passed as props
+    it('should detect inline function prop breaking React.memo', async () => {
       const testFile = path.join(tempDir, 'InlineFunctionProp.tsx');
       fs.writeFileSync(
         testFile,
