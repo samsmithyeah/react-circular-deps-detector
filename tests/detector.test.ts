@@ -75,7 +75,7 @@ describe('Circular Dependency Detector', () => {
         ignore: [],
       });
 
-      expect(result.summary.filesAnalyzed).toBe(9);
+      expect(result.summary.filesAnalyzed).toBe(10);
       expect(result.summary.hooksAnalyzed).toBeGreaterThan(0);
 
       // Should find circular dependencies in multiple files
@@ -105,7 +105,7 @@ describe('Circular Dependency Detector', () => {
       });
 
       // Should not analyze the ignored file
-      expect(result.summary.filesAnalyzed).toBe(8); // 9 total - 1 ignored = 8
+      expect(result.summary.filesAnalyzed).toBe(9); // 10 total - 1 ignored = 9
       const analyzedFilenames = result.circularDependencies.map((dep) => path.basename(dep.file));
       expect(analyzedFilenames.every((filename) => filename !== 'circular-example.tsx')).toBe(true);
       // May still find circular dependencies in other files like real-circular-example.tsx

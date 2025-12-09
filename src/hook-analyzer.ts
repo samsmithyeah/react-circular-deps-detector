@@ -18,6 +18,26 @@ import { analyzeStateInteractions } from './effect-analyzer';
 import { isHookIgnored, createAnalysis } from './utils';
 
 /**
+ * Extract the root identifier from a dependency expression.
+ * Handles both simple identifiers (count) and member expressions (state.count, state.nested.value).
+ * Returns the root identifier name or null if not extractable.
+ */
+function extractRootIdentifier(node: t.Node | null): string | null {
+  if (!node) return null;
+
+  if (t.isIdentifier(node)) {
+    return node.name;
+  }
+
+  if (t.isMemberExpression(node)) {
+    // Recursively get the root object (e.g., state.count -> state, state.a.b -> state)
+    return extractRootIdentifier(node.object);
+  }
+
+  return null;
+}
+
+/**
  * Find all hook call expressions in an AST.
  * Returns nodes for useEffect, useCallback, and useMemo hooks.
  */
@@ -44,6 +64,14 @@ export function findHookNodes(ast: t.Node): HookNodeInfo[] {
 
 /**
  * Analyze a single hook node for potential infinite loop patterns.
+ *
+ * @param hookNode - The hook node to analyze
+ * @param stateInfo - Map of state variables to their setters
+ * @param filePath - Path to the file being analyzed
+ * @param crossFileAnalysis - Cross-file analysis results
+ * @param fileContent - File content for comment detection
+ * @param refVars - Set of ref variable names
+ * @param localFunctionSetters - Map of local functions to the setters they call (transitively)
  */
 export function analyzeHookNode(
   hookNode: HookNodeInfo,
@@ -51,7 +79,8 @@ export function analyzeHookNode(
   filePath: string,
   crossFileAnalysis: CrossFileAnalysis,
   fileContent?: string,
-  refVars: Set<string> = new Set()
+  refVars: Set<string> = new Set(),
+  localFunctionSetters: Map<string, string[]> = new Map()
 ): HookAnalysis | null {
   const { node, hookName, line } = hookNode;
 
@@ -70,13 +99,20 @@ export function analyzeHookNode(
     return null;
   }
 
+  // Extract dependencies - handles both simple identifiers and member expressions
+  // e.g., [count] -> ['count'], [state.count] -> ['state'], [state.a.b] -> ['state']
   const dependencies = depsArray.elements
-    .filter((el): el is t.Identifier => t.isIdentifier(el))
-    .map((el) => el.name);
+    .map((el) => extractRootIdentifier(el))
+    .filter((name): name is string => name !== null);
 
   // Analyze hook body for state interactions
   const hookBody = node.arguments[0];
-  const stateInteractions = analyzeStateInteractions(hookBody, stateInfo, refVars);
+  const stateInteractions = analyzeStateInteractions(
+    hookBody,
+    stateInfo,
+    refVars,
+    localFunctionSetters
+  );
 
   // CFG-based analysis for more accurate unconditional detection
   let cfgAnalysis: Map<string, SetStateAnalysis> | null = null;
@@ -205,6 +241,29 @@ export function analyzeHookNode(
         actualStateModifications: stateInteractions.deferredModifications,
         stateReads: stateInteractions.reads,
         explanation: `'${setter}()' is called inside an async callback (setInterval, onSnapshot, etc.), not during effect execution. This is a safe pattern - the state update is deferred and won't cause an immediate re-render loop.`,
+      });
+    }
+
+    // Check if this is a cleanup function modification (return () => setState())
+    // Cleanup functions run when the effect re-runs or component unmounts.
+    // If the cleanup modifies state that the effect depends on, it can cause a loop:
+    // effect runs -> cleanup runs -> state changes -> effect re-runs -> cleanup runs...
+    if (stateInteractions.cleanupModifications.includes(setter) && canCauseDirectLoop) {
+      return createAnalysis({
+        type: 'confirmed-infinite-loop',
+        errorCode: 'RLD-200',
+        category: 'critical',
+        severity: 'high',
+        confidence: 'high',
+        hookType: hookName,
+        line,
+        file: filePath,
+        problematicDependency: dep,
+        stateVariable: dep,
+        setterFunction: setter,
+        actualStateModifications: stateInteractions.cleanupModifications,
+        stateReads: stateInteractions.reads,
+        explanation: `${hookName} cleanup function calls '${setter}()' which modifies '${dep}' that the effect depends on. This creates an infinite loop: effect runs → cleanup runs → state changes → effect re-runs.`,
       });
     }
 

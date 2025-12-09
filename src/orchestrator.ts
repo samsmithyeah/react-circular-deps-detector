@@ -34,7 +34,7 @@ import {
   StabilityConfig,
 } from './state-extractor';
 import { detectSetStateDuringRender } from './render-phase-detector';
-import { detectUseEffectWithoutDeps } from './effect-analyzer';
+import { detectUseEffectWithoutDeps, buildLocalFunctionSetterMap } from './effect-analyzer';
 import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
 import { setCurrentOptions } from './utils';
@@ -189,6 +189,9 @@ function analyzeFileIntelligently(
     const noDepsIssues = detectUseEffectWithoutDeps(ast, stateInfo, file.file, file.content);
     results.push(...noDepsIssues);
 
+    // Build map of local functions to the setters they call (for indirect modification detection)
+    const localFunctionSetters = buildLocalFunctionSetterMap(ast, stateInfo);
+
     // Analyze each hook
     const hookNodes = findHookNodes(ast);
 
@@ -212,7 +215,8 @@ function analyzeFileIntelligently(
         file.file,
         crossFileAnalysis,
         file.content,
-        refVars
+        refVars,
+        localFunctionSetters
       );
       if (analysis) {
         results.push(analysis);

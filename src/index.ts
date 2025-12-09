@@ -56,7 +56,11 @@ export {
   checkEarlyReturnPattern,
 } from './guard-analyzer';
 
-export { detectUseEffectWithoutDeps, analyzeStateInteractions } from './effect-analyzer';
+export {
+  detectUseEffectWithoutDeps,
+  analyzeStateInteractions,
+  buildLocalFunctionSetterMap,
+} from './effect-analyzer';
 
 export { findHookNodes, analyzeHookNode } from './hook-analyzer';
 
