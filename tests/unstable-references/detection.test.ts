@@ -1,9 +1,9 @@
-import { detectCircularDependencies } from '../src/detector';
+import { detectCircularDependencies } from '../../src/detector';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
-describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
+describe('Unstable Reference Detection', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -16,7 +16,7 @@ describe('Unstable Reference Detection (Cloudflare-style bugs)', () => {
 
   describe('Object literals in dependency arrays', () => {
     it('should detect inline object in useEffect dependency array', async () => {
-      // This is the exact Cloudflare bug pattern
+      // Object recreated each render causes effect to fire every render
       const testFile = path.join(tempDir, 'BuggyComponent.tsx');
       fs.writeFileSync(
         testFile,

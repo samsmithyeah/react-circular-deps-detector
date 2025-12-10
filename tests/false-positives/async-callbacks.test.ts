@@ -1,13 +1,13 @@
 /**
- * Tests for real-world false positive cases from GoingOutApp
+ * Tests for async callback false positive prevention
  *
  * These tests ensure the detector doesn't flag legitimate async callback patterns
  * as infinite loops. Each test case is based on actual code that was incorrectly
  * flagged as a "CONFIRMED infinite loop" before the async callback detection fix.
  */
 
-import { analyzeHooks } from '../src/orchestrator';
-import { parseFile, ParsedFile } from '../src/parser';
+import { analyzeHooks } from '../../src/orchestrator';
+import { parseFile, ParsedFile } from '../../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -24,11 +24,11 @@ function createTestFile(content: string): ParsedFile {
   return parsed;
 }
 
-describe('Real-World False Positives from GoingOutApp', () => {
-  describe('OutgoingSignalCard.tsx - setInterval pattern', () => {
+describe('Async Callback False Positives', () => {
+  describe('setInterval pattern', () => {
     it('should NOT flag setCurrentTime inside setInterval as infinite loop', () => {
       // This pattern was incorrectly flagged as "CONFIRMED infinite loop"
-      // Original code from GoingOutApp/components/OutgoingSignalCard.tsx
+      // Timer callbacks are deferred and don't execute synchronously
       const parsed = createTestFile(`
         import React, { useState, useEffect } from 'react';
 
@@ -77,10 +77,10 @@ describe('Real-World False Positives from GoingOutApp', () => {
     });
   });
 
-  describe('InvitationsContext.tsx - onSnapshot pattern', () => {
+  describe('Firebase onSnapshot pattern', () => {
     it('should NOT flag setCrewsCache inside onSnapshot as infinite loop', () => {
       // This pattern was incorrectly flagged as "CONFIRMED infinite loop"
-      // Original code from GoingOutApp/context/InvitationsContext.tsx
+      // Real-time listener callbacks are deferred and event-driven
       const parsed = createTestFile(`
         import React, { useState, useEffect, useContext, createContext } from 'react';
 
@@ -148,10 +148,10 @@ describe('Real-World False Positives from GoingOutApp', () => {
     });
   });
 
-  describe('ContactsContext.tsx - onSnapshot with functional updater', () => {
+  describe('onSnapshot with functional updater pattern', () => {
     it('should NOT flag setAllContacts inside onSnapshot as infinite loop', () => {
       // This pattern was incorrectly flagged as "CONFIRMED infinite loop"
-      // Original code from GoingOutApp/context/ContactsContext.tsx
+      // Real-time listener callbacks with functional updaters are safe
       const parsed = createTestFile(`
         import React, { useState, useEffect, useRef } from 'react';
 

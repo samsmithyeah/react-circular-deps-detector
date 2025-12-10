@@ -1,10 +1,10 @@
-import { detectCircularDependencies } from '../src/detector';
+import { detectCircularDependencies } from '../../src/detector';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 
 /**
- * Tests for infinite loop patterns from cloudflare-example project.
+ * Tests for common render-time infinite loop patterns.
  *
  * These tests cover 5 additional detectable cases that static analysis should catch:
  * 1. setState during render - calling setState in component body
@@ -13,11 +13,11 @@ import * as os from 'os';
  * 4. useCallback with object dependency - unstable object in useCallback deps
  * 5. Array spread in dependencies - [...arr].map() creates new reference
  */
-describe('Cloudflare-style infinite loop examples', () => {
+describe('Render-time infinite loop patterns', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rcd-cloudflare-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rcd-render-'));
   });
 
   afterEach(() => {

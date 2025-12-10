@@ -1,12 +1,12 @@
 /**
- * Tests based on Gemini's feedback for react-circular-deps-detector
+ * Tests for guard patterns and callback execution contexts in infinite loop detection.
  *
  * These tests cover both implemented fixes and pending improvements.
  * Tests marked with .skip are for features not yet implemented.
  */
 
-import { analyzeHooks } from '../src/orchestrator';
-import { parseFile, ParsedFile } from '../src/parser';
+import { analyzeHooks } from '../../src/orchestrator';
+import { parseFile, ParsedFile } from '../../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -23,7 +23,7 @@ function createTestFile(content: string): ParsedFile {
   return parsed;
 }
 
-describe('Gemini Feedback: Implemented Fixes', () => {
+describe('Guards and Callbacks: Implemented Fixes', () => {
   describe('1. AST Re-parsing Performance Fix', () => {
     it('should include AST in ParsedFile', () => {
       const parsed = createTestFile(`
@@ -378,11 +378,11 @@ describe('Gemini Feedback: Implemented Fixes', () => {
   });
 });
 
-describe('Gemini Feedback: Pending Improvements', () => {
+describe('Guards and Callbacks: Pending Improvements', () => {
   describe('Path Alias Resolution (tsconfig)', () => {
     it('should have path resolver available', () => {
       // Test that the path resolver module exists and exports the expected functions
-      const pathResolver = require('../src/path-resolver');
+      const pathResolver = require('../../src/path-resolver');
       expect(pathResolver.createPathResolver).toBeDefined();
       expect(pathResolver.getTsconfigForProject).toBeDefined();
       expect(pathResolver.getPathsMatcher).toBeDefined();
@@ -390,16 +390,16 @@ describe('Gemini Feedback: Pending Improvements', () => {
     });
 
     it('should resolve relative imports correctly', () => {
-      const pathResolver = require('../src/path-resolver');
+      const pathResolver = require('../../src/path-resolver');
       const path = require('path');
 
       // Create resolver for this project (which has a tsconfig.json)
       const resolver = pathResolver.createPathResolver({
-        projectRoot: path.join(__dirname, '..'),
+        projectRoot: path.join(__dirname, '..', '..'),
       });
 
       // Test relative import resolution
-      const fromFile = path.join(__dirname, 'fixtures', 'hooks-dependency-loop.tsx');
+      const fromFile = path.join(__dirname, '..', 'fixtures', 'hooks-dependency-loop.tsx');
       const result = resolver.resolve(fromFile, './clean-hooks-example.tsx');
 
       // Should resolve to the clean-hooks-example file
