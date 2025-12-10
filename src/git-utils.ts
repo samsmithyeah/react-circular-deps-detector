@@ -135,8 +135,15 @@ export function getChangedFilesSinceRef(options: GitChangedFilesOptions): GitCha
       });
     }
 
-    // Also get uncommitted changes (staged and unstaged)
-    const statusOutput = execFileSync('git', ['diff', '--name-only', 'HEAD'], {
+    // Get staged changes (files added to the index)
+    const stagedOutput = execFileSync('git', ['diff', '--name-only', '--cached'], {
+      cwd,
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+
+    // Get unstaged changes (files modified in the working directory but not staged)
+    const unstagedOutput = execFileSync('git', ['diff', '--name-only'], {
       cwd,
       stdio: 'pipe',
       encoding: 'utf-8',
@@ -152,7 +159,8 @@ export function getChangedFilesSinceRef(options: GitChangedFilesOptions): GitCha
     // Combine all changed files and deduplicate
     const allRelativeFiles = [
       ...committedDiff.trim().split('\n'),
-      ...statusOutput.trim().split('\n'),
+      ...stagedOutput.trim().split('\n'),
+      ...unstagedOutput.trim().split('\n'),
       ...untrackedOutput.trim().split('\n'),
     ];
 

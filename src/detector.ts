@@ -116,12 +116,8 @@ export async function detectCircularDependencies(
         targetPath
       );
 
-      // Add dependent files to the analysis set
-      const allFilesToAnalyze = new Set(reactFiles);
-      for (const file of dependentFiles) {
-        allFilesToAnalyze.add(file);
-      }
-      reactFiles = Array.from(allFilesToAnalyze);
+      // Combine changed files and their dependents, ensuring uniqueness
+      reactFiles = Array.from(new Set([...reactFiles, ...dependentFiles]));
     }
   } else {
     reactFiles = allReactFiles;
