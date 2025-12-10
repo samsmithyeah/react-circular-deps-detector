@@ -277,7 +277,13 @@ function findVariableDeclaration(
       // Handle multi-line declarations (object literals, arrow functions, etc.)
       if (!isBalanced(fullInitializer)) {
         // Collect lines until we find a balanced expression
-        for (let i = lineIndex + 1; i < lines.length && i < beforeLine; i++) {
+        // Bounded by: beforeLine (must be declared before use) and MAX_DECLARATION_SEARCH_LINES (safety limit)
+        const maxSearchLine = Math.min(
+          lines.length,
+          beforeLine,
+          lineIndex + 1 + MAX_DECLARATION_SEARCH_LINES
+        );
+        for (let i = lineIndex + 1; i < maxSearchLine; i++) {
           fullInitializer += '\n' + lines[i];
           endLine = i;
           if (isBalanced(fullInitializer)) break;
@@ -315,11 +321,13 @@ function findVariableDeclaration(
       let funcEndLine = lineIndex;
 
       if (!isBalanced(fullFunction)) {
-        for (
-          let i = lineIndex + 1;
-          i < lines.length && i < beforeLine + MAX_DECLARATION_SEARCH_LINES;
-          i++
-        ) {
+        // Bounded by: beforeLine (must be declared before use) and MAX_DECLARATION_SEARCH_LINES (safety limit)
+        const maxSearchLine = Math.min(
+          lines.length,
+          beforeLine,
+          lineIndex + 1 + MAX_DECLARATION_SEARCH_LINES
+        );
+        for (let i = lineIndex + 1; i < maxSearchLine; i++) {
           fullFunction += '\n' + lines[i];
           funcEndLine = i;
           if (isBalanced(fullFunction)) break;
@@ -566,23 +574,23 @@ function findImportInsertPosition(
 
     // Check if this line starts a React import with destructuring
     if (/^\s*import\s*{/.test(line) || /^\s*import\s+\w+\s*,\s*{/.test(line)) {
-      // Collect lines until we have a complete import statement
+      // Collect lines until we have a complete import statement (balanced braces + semicolon or from clause)
       let fullImport = line;
       let endLine = i;
 
-      // Handle multi-line imports
-      while (!fullImport.includes("from 'react'") && !fullImport.includes('from "react"')) {
+      // Handle multi-line imports - collect until we have balanced braces and a complete statement
+      while (endLine < lines.length - 1) {
+        // Check if we have a complete import statement using regex
+        // This is more robust than includes() as it validates the structure
+        if (/}\s*from\s*['"][^'"]+['"]/.test(fullImport)) {
+          break;
+        }
         endLine++;
-        if (endLine >= lines.length) break;
         fullImport += '\n' + lines[endLine];
       }
 
-      // Check if this is a React import
-      if (!/'react'/.test(fullImport) && !/"react"/.test(fullImport)) {
-        continue;
-      }
-
-      // Extract the imports from the destructuring
+      // Use regex to properly match React imports - this validates the structure
+      // and won't match 'react' inside comments or strings within the import
       const destructureMatch = fullImport.match(/import\s*{\s*([^}]*)\s*}\s*from\s*['"]react['"]/);
       const reactDestructureMatch = fullImport.match(
         /import\s+React\s*,\s*{\s*([^}]*)\s*}\s*from\s*['"]react['"]/
@@ -628,13 +636,18 @@ function findImportInsertPosition(
 
     // Collect lines if this looks like an import start
     if (/^\s*import\s+/.test(lines[i])) {
-      while (!fullImport.includes(';') && endLine < lines.length - 1) {
+      // Collect lines until we have a complete statement (ends with semicolon or has complete from clause)
+      while (endLine < lines.length - 1) {
+        if (/from\s*['"][^'"]+['"]\s*;?\s*$/.test(fullImport)) {
+          break;
+        }
         endLine++;
         fullImport += '\n' + lines[endLine];
       }
 
-      // Check if this is a React import
-      if (/'react'/.test(fullImport) || /"react"/.test(fullImport)) {
+      // Check if this is a React import using regex to match the from clause
+      // This matches 'react' only in the from clause, not in comments/strings
+      if (/from\s*['"]react['"]/.test(fullImport)) {
         return {
           line: endLine + 1,
           edit: `import { ${hookName} } from 'react';\n`,
