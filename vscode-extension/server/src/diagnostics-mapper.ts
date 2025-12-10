@@ -238,12 +238,153 @@ function getFileName(filePath: string): string {
 }
 
 /**
+ * Extract the initializer expression from the rest of a line after "varName = ".
+ * Handles multi-variable declarations like "const a = {}, b = [];" by stopping
+ * at a top-level comma (outside of balanced brackets).
+ */
+function extractInitializerFromRest(restOfLine: string): string | null {
+  let depth = 0;
+  let inString = false;
+  let stringChar = '';
+  let inTemplate = false;
+  let templateDepth = 0;
+
+  for (let i = 0; i < restOfLine.length; i++) {
+    const char = restOfLine[i];
+    const prevChar = i > 0 ? restOfLine[i - 1] : '';
+    const nextChar = i < restOfLine.length - 1 ? restOfLine[i + 1] : '';
+
+    // Skip comments
+    if (!inString && !inTemplate) {
+      if (char === '/' && nextChar === '/') {
+        // Rest of line is a comment, return what we have
+        return restOfLine.substring(0, i).trimEnd();
+      }
+      if (char === '/' && nextChar === '*') {
+        // Block comment - skip to end
+        const endIdx = restOfLine.indexOf('*/', i + 2);
+        if (endIdx === -1) {
+          return restOfLine.substring(0, i).trimEnd();
+        }
+        i = endIdx + 1;
+        continue;
+      }
+    }
+
+    // Handle string escapes
+    if (prevChar === '\\' && (inString || inTemplate)) continue;
+
+    // Handle strings
+    if ((char === '"' || char === "'") && !inTemplate) {
+      if (inString && stringChar === char) {
+        inString = false;
+      } else if (!inString) {
+        inString = true;
+        stringChar = char;
+      }
+      continue;
+    }
+
+    // Handle template literals
+    if (char === '`') {
+      if (inTemplate && templateDepth === 0) {
+        inTemplate = false;
+      } else if (!inString) {
+        inTemplate = true;
+      }
+      continue;
+    }
+
+    if (inString) continue;
+
+    // Handle ${} in templates
+    if (inTemplate && char === '$' && nextChar === '{') {
+      templateDepth++;
+      i++;
+      continue;
+    }
+    if (inTemplate && char === '}' && templateDepth > 0) {
+      templateDepth--;
+      continue;
+    }
+
+    // Track brackets
+    if (char === '(' || char === '[' || char === '{') {
+      depth++;
+    } else if (char === ')' || char === ']' || char === '}') {
+      depth--;
+    }
+
+    // At top level, comma or semicolon ends this initializer
+    if (depth === 0 && (char === ',' || char === ';')) {
+      return restOfLine.substring(0, i).trimEnd();
+    }
+  }
+
+  // No comma/semicolon found, return the whole rest (trimmed)
+  return restOfLine.trimEnd();
+}
+
+/**
+ * Find the start line of the React component/function that contains the given line.
+ * Returns the line number where the component function starts, or 0 if not found.
+ * This is used to constrain variable searches to within the component scope,
+ * preventing us from wrapping module-scope variables with hooks (which violates Rules of Hooks).
+ */
+function findComponentScopeStart(documentText: string, atLine: number): number {
+  const lines = documentText.split('\n');
+
+  // Track brace depth to find function boundaries
+  let braceDepth = 0;
+  let inComponent = false;
+  let componentStartLine = 0;
+
+  // First pass: scan forward from the start to find which function contains atLine
+  for (let i = 0; i <= atLine && i < lines.length; i++) {
+    const line = lines[i];
+
+    // Check if this line starts a function (component candidate)
+    // Match: function ComponentName, const ComponentName = function, const ComponentName = (
+    // or arrow function definitions
+    const isFunctionStart =
+      /^\s*(export\s+)?(default\s+)?function\s+\w+/.test(line) ||
+      /^\s*(export\s+)?(const|let|var)\s+\w+\s*=\s*(function|\([^)]*\)\s*=>|\w+\s*=>)/.test(line);
+
+    if (isFunctionStart && braceDepth === 0) {
+      componentStartLine = i;
+      inComponent = true;
+    }
+
+    // Count braces to track scope depth
+    // Use simple counting (not perfect but good enough for this purpose)
+    for (const char of line) {
+      if (char === '{') braceDepth++;
+      if (char === '}') {
+        braceDepth--;
+        if (braceDepth === 0 && inComponent) {
+          // We closed a function, reset
+          inComponent = false;
+          if (i < atLine) {
+            componentStartLine = 0;
+          }
+        }
+      }
+    }
+  }
+
+  return componentStartLine;
+}
+
+/**
  * Find a variable declaration in the document by name.
  * Searches for patterns like:
  * - const varName = ...
  * - let varName = ...
  * - var varName = ...
  * - function varName(...) { ... }
+ *
+ * Only searches within the React component scope to avoid wrapping
+ * module-scope variables with hooks (which would violate Rules of Hooks).
  */
 function findVariableDeclaration(
   documentText: string,
@@ -252,23 +393,67 @@ function findVariableDeclaration(
 ): VariableDeclaration | null {
   const lines = documentText.split('\n');
 
+  // Find the component scope to constrain our search
+  // We should not wrap variables declared outside the component
+  const componentStartLine = findComponentScopeStart(documentText, beforeLine);
+
   // Search backwards from the hook line to find the variable declaration
-  for (let lineIndex = beforeLine - 1; lineIndex >= 0; lineIndex--) {
+  // Stop at the component boundary to avoid module-scope variables
+  for (let lineIndex = beforeLine - 1; lineIndex >= componentStartLine; lineIndex--) {
     const line = lines[lineIndex];
     const indent = line.match(/^(\s*)/)?.[1] || '';
 
+    // Skip lines that are at module scope (no indentation and we're past the component start)
+    // This is an additional safety check
+    if (lineIndex === componentStartLine && indent.length === 0) {
+      // This is the component definition line itself, skip it
+      continue;
+    }
+
     // Check for const/let/var declarations with various patterns
-    // Pattern: const varName = value;
-    const varDeclRegex = new RegExp(
-      `^(\\s*)(const|let|var)\\s+${escapeRegExp(varName)}\\s*=\\s*(.+)$`
+    // Pattern 1: const varName = value; (variable is first)
+    // Pattern 2: const a = {}, varName = value; (variable is not first)
+    const varFirstRegex = new RegExp(`^(\\s*)(const|let|var)\\s+${escapeRegExp(varName)}\\s*=\\s*`);
+    const varNotFirstRegex = new RegExp(
+      `^(\\s*)(const|let|var)\\s+.*,\\s*${escapeRegExp(varName)}\\s*=\\s*`
     );
-    const varMatch = line.match(varDeclRegex);
+
+    const varFirstMatch = line.match(varFirstRegex);
+    const varNotFirstMatch = !varFirstMatch ? line.match(varNotFirstRegex) : null;
+    const varMatch = varFirstMatch || varNotFirstMatch;
 
     if (varMatch) {
-      const [, , declType, initializer] = varMatch;
-      const initializerStart = line.indexOf('=') + 1;
-      // Find the actual start of the initializer (skip whitespace after =)
-      const initializerStartTrimmed = line.indexOf(initializer.trim(), initializerStart);
+      const [fullMatch, , declType] = varMatch;
+      let initializerStartCol = fullMatch.length;
+
+      // For varNotFirstMatch, we need to find where "varName =" actually starts
+      if (varNotFirstMatch) {
+        const varNameIdx = line.indexOf(varName + ' =', fullMatch.indexOf(','));
+        if (varNameIdx === -1) {
+          const varNameIdxNoSpace = line.indexOf(varName + '=', fullMatch.indexOf(','));
+          if (varNameIdxNoSpace === -1) continue;
+          initializerStartCol = varNameIdxNoSpace + varName.length + 1;
+        } else {
+          // Find the "=" after varName
+          const eqIdx = line.indexOf('=', varNameIdx + varName.length);
+          initializerStartCol = eqIdx + 1;
+          // Skip whitespace after =
+          while (initializerStartCol < line.length && line[initializerStartCol] === ' ') {
+            initializerStartCol++;
+          }
+        }
+      }
+
+      // Extract the initializer, being careful with multi-variable declarations
+      // e.g., "const a = {}, b = [];" - we only want the initializer for our variable
+      const restOfLine = line.substring(initializerStartCol);
+      const initializer = extractInitializerFromRest(restOfLine);
+
+      if (!initializer) {
+        continue; // Couldn't parse the initializer
+      }
+
+      const initializerStartTrimmed = initializerStartCol;
 
       // Check if this is a single-line declaration or spans multiple lines
       let fullInitializer = initializer.trimEnd();

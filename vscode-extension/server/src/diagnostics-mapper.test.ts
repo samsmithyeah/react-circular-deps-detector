@@ -382,6 +382,59 @@ function Component() {
   });
 
   describe('Edge cases', () => {
+    it('should not offer wrap for variables outside component scope', () => {
+      // Line numbers (0-indexed):
+      // 0: import...
+      // 1: (empty)
+      // 2: const config = { id: 1 }; // Outside component
+      // 3: (empty)
+      // 4: function Component() {
+      // 5:   useEffect...
+      // 6: }
+      const documentText = `import { useEffect } from 'react';
+
+const config = { id: 1 }; // Declared outside component
+
+function Component() {
+  useEffect(() => {}, [config]);
+}`;
+
+      // Diagnostic is at line 5 where useEffect is
+      const diagnostic = createDiagnostic('RLD-400', 5, 'config');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useMemo'));
+      expect(wrapAction).toBeUndefined();
+    });
+
+    it('should handle multi-variable declarations correctly', () => {
+      // Line numbers (0-indexed):
+      // 0: import...
+      // 1: (empty)
+      // 2: function Component() {
+      // 3:   const a = {}, config = { id: 1 };
+      // 4:   useEffect...
+      // 5: }
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  const a = {}, config = { id: 1 };
+  useEffect(() => {}, [config]);
+}`;
+
+      // Diagnostic is at line 4 where useEffect is
+      const diagnostic = createDiagnostic('RLD-400', 4, 'config');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useMemo'));
+      expect(wrapAction).toBeDefined();
+      // The edit should only wrap 'config', not 'a'
+      const edits = wrapAction?.edit?.changes?.['file:///test.tsx'];
+      const wrapEdit = edits?.find((e) => e.newText.includes('useMemo'));
+      expect(wrapEdit?.newText).toContain('{ id: 1 }');
+      expect(wrapEdit?.newText).not.toContain('a =');
+    });
+
     it('should not offer wrap if already wrapped in useMemo', () => {
       const documentText = `import { useEffect, useMemo } from 'react';
 
