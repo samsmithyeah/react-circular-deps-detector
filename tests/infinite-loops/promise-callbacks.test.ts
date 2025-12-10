@@ -1,4 +1,4 @@
-import { detectCircularDependencies } from '../src/detector';
+import { detectCircularDependencies } from '../../src/detector';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -470,10 +470,10 @@ describe('Promise callback setState detection', () => {
     });
   });
 
-  describe('Real-world Cloudflare-style pattern', () => {
-    it('should detect the exact Cloudflare outage pattern', async () => {
-      // This is the exact pattern that caused the Cloudflare outage
-      const testFile = path.join(tempDir, 'CloudflarePattern.tsx');
+  describe('Real-world unstable object pattern', () => {
+    it('should detect unstable object in dependency array causing loop', async () => {
+      // Common pattern where an object recreated on each render causes an infinite loop
+      const testFile = path.join(tempDir, 'UnstableObjectPattern.tsx');
       fs.writeFileSync(
         testFile,
         `

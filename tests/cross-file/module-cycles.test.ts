@@ -1,10 +1,10 @@
-import { detectCircularDependencies } from '../src/detector';
-import { buildModuleGraph } from '../src/module-graph';
-import { parseFile } from '../src/parser';
+import { detectCircularDependencies } from '../../src/detector';
+import { buildModuleGraph } from '../../src/module-graph';
+import { parseFile } from '../../src/parser';
 import * as path from 'path';
 
 describe('Cross-File Circular Dependency Detection', () => {
-  const crossFileFixturesPath = path.join(__dirname, 'fixtures', 'cross-file');
+  const crossFileFixturesPath = path.join(__dirname, '..', 'fixtures', 'cross-file');
 
   describe('Import-based Circular Dependencies', () => {
     it('should detect circular imports between multiple files', async () => {

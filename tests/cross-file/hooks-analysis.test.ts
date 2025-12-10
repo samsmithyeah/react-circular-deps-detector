@@ -1,10 +1,10 @@
-import { analyzeHooks } from '../src/orchestrator';
-import { parseFile } from '../src/parser';
+import { analyzeHooks } from '../../src/orchestrator';
+import { parseFile } from '../../src/parser';
 import * as path from 'path';
 import * as fs from 'fs';
 
 describe('Cross-File React Hooks Analysis', () => {
-  const testDir = path.join(__dirname, 'fixtures', 'cross-file-hooks');
+  const testDir = path.join(__dirname, '..', 'fixtures', 'cross-file-hooks');
 
   beforeAll(() => {
     // Create test fixtures directory and files

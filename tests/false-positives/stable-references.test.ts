@@ -1,5 +1,5 @@
 /**
- * Tests for false positive cases discovered in story-app
+ * Tests for stable reference false positive prevention
  *
  * These tests ensure the detector doesn't flag legitimate patterns as issues:
  * 1. Variables wrapped in useCallback/useMemo
@@ -7,8 +7,8 @@
  * 3. Zustand's getState() pattern for stable actions
  */
 
-import { analyzeHooks } from '../src/orchestrator';
-import { parseFile, ParsedFile } from '../src/parser';
+import { analyzeHooks } from '../../src/orchestrator';
+import { parseFile, ParsedFile } from '../../src/parser';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -25,7 +25,7 @@ function createTestFile(content: string): ParsedFile {
   return parsed;
 }
 
-describe('Story-App False Positives', () => {
+describe('Stable Reference False Positives', () => {
   describe('useCallback-wrapped functions should be stable', () => {
     it('should NOT flag functions wrapped in useCallback as unstable', () => {
       // From IllustrationSelection.tsx - loadStyles is wrapped in useCallback
