@@ -357,11 +357,9 @@ program
   )
   .option('--confirmed-only', 'Only report confirmed infinite loops (not potential issues)')
   .option('--cache', 'Enable caching for faster repeated runs')
-  .option(
-    '--strict',
-    'Enable TypeScript strict mode for type-based stability detection (slower but more accurate)'
-  )
-  .option('--tsconfig <path>', 'Path to tsconfig.json (for --strict mode)')
+  .option('--strict', 'Enable TypeScript strict mode (auto-enabled when tsconfig.json found)')
+  .option('--no-strict', 'Disable strict mode (use heuristics only)')
+  .option('--tsconfig <path>', 'Path to tsconfig.json (for strict mode)')
   .option('--no-presets', 'Disable auto-detection of library presets from package.json')
   .option(
     '--since <ref>',
@@ -400,11 +398,6 @@ program
             console.log(chalk.gray(`  Including files that import changed files`));
           }
         }
-        if (options.strict) {
-          console.log(
-            chalk.yellow(`Strict mode enabled: Using TypeScript compiler for type-based analysis`)
-          );
-        }
       }
 
       const results = await detectCircularDependencies(absolutePath, {
@@ -422,11 +415,30 @@ program
           minSeverity: options.minSeverity,
           minConfidence: options.minConfidence,
           includePotentialIssues: !options.confirmedOnly,
-          strictMode: options.strict,
           tsconfigPath: options.tsconfigPath,
           noPresets: options.presets === false, // --no-presets becomes presets: false
         },
       });
+
+      // Show strict mode status (only for non-JSON/SARIF output)
+      if (!options.json && !options.sarif) {
+        const { strictModeDetection } = results;
+        if (strictModeDetection.enabled) {
+          if (strictModeDetection.reason === 'auto-detected') {
+            console.log(
+              chalk.cyan(`Strict mode enabled: TypeScript project detected (tsconfig.json found)`)
+            );
+            console.log(chalk.gray(`  Use --no-strict to disable type-based analysis`));
+          } else {
+            console.log(
+              chalk.yellow(`Strict mode enabled: Using TypeScript compiler for type-based analysis`)
+            );
+          }
+        } else if (strictModeDetection.reason === 'disabled') {
+          console.log(chalk.gray('Strict mode disabled by flag or configuration.'));
+        }
+        // Note: 'no-tsconfig' case is silent - no message needed for the common JS-only case
+      }
 
       if (options.json) {
         console.log(JSON.stringify(results, null, 2));

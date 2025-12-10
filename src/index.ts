@@ -22,6 +22,7 @@ export {
   DetectionResults,
   DetectorOptions,
   CircularDependency,
+  StrictModeDetection,
 } from './detector';
 
 // Intelligent hooks analysis (main entry point)

@@ -1,5 +1,7 @@
 import { detectCircularDependencies } from '../src/detector';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
 
 describe('Circular Dependency Detector', () => {
   const fixturesPath = path.join(__dirname, 'fixtures');
@@ -126,6 +128,177 @@ describe('Circular Dependency Detector', () => {
 
       // Should complete in under 5 seconds for small test files
       expect(duration).toBeLessThan(5000);
+    });
+  });
+
+  describe('Strict Mode Auto-Detection', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      // Create a unique temp directory for each test
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rld-test-'));
+    });
+
+    afterEach(() => {
+      // Clean up temp directory
+      if (tempDir && fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should return strictModeDetection in results', async () => {
+      const result = await detectCircularDependencies(fixturesPath, {
+        pattern: 'clean-example.tsx',
+        ignore: [],
+      });
+
+      expect(result.strictModeDetection).toBeDefined();
+      expect(result.strictModeDetection.enabled).toBeDefined();
+      expect(result.strictModeDetection.reason).toBeDefined();
+    });
+
+    it('should auto-detect strict mode when tsconfig.json exists', async () => {
+      // Create a React file in the temp directory
+      const reactFile = path.join(tempDir, 'Component.tsx');
+      fs.writeFileSync(
+        reactFile,
+        `
+        import React, { useState, useEffect } from 'react';
+        export function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {}, [count]);
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      // Create tsconfig.json
+      fs.writeFileSync(
+        path.join(tempDir, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } })
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      expect(result.strictModeDetection.enabled).toBe(true);
+      expect(result.strictModeDetection.reason).toBe('auto-detected');
+      expect(result.strictModeDetection.tsconfigPath).toContain('tsconfig.json');
+    });
+
+    it('should not enable strict mode when no tsconfig.json exists', async () => {
+      // Create a React file without tsconfig
+      const reactFile = path.join(tempDir, 'Component.jsx');
+      fs.writeFileSync(
+        reactFile,
+        `
+        import React, { useState, useEffect } from 'react';
+        export function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {}, [count]);
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.jsx',
+        ignore: [],
+      });
+
+      expect(result.strictModeDetection.enabled).toBe(false);
+      expect(result.strictModeDetection.reason).toBe('no-tsconfig');
+    });
+
+    it('should respect explicit strict: true', async () => {
+      // Create a React file without tsconfig
+      const reactFile = path.join(tempDir, 'Component.jsx');
+      fs.writeFileSync(
+        reactFile,
+        `
+        import React, { useState } from 'react';
+        export function Component() {
+          const [count] = useState(0);
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.jsx',
+        ignore: [],
+        strict: true,
+      });
+
+      expect(result.strictModeDetection.enabled).toBe(true);
+      expect(result.strictModeDetection.reason).toBe('explicit');
+    });
+
+    it('should respect explicit strict: false even with tsconfig.json', async () => {
+      // Create a React file
+      const reactFile = path.join(tempDir, 'Component.tsx');
+      fs.writeFileSync(
+        reactFile,
+        `
+        import React, { useState } from 'react';
+        export function Component() {
+          const [count] = useState(0);
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      // Create tsconfig.json
+      fs.writeFileSync(
+        path.join(tempDir, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } })
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+        strict: false, // Explicitly disable
+      });
+
+      expect(result.strictModeDetection.enabled).toBe(false);
+      expect(result.strictModeDetection.reason).toBe('disabled');
+    });
+
+    it('should find tsconfig.json in parent directory', async () => {
+      // Create subdirectory structure
+      const subDir = path.join(tempDir, 'src', 'components');
+      fs.mkdirSync(subDir, { recursive: true });
+
+      // Create React file in subdirectory
+      const reactFile = path.join(subDir, 'Component.tsx');
+      fs.writeFileSync(
+        reactFile,
+        `
+        import React, { useState } from 'react';
+        export function Component() {
+          const [count] = useState(0);
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      // Create tsconfig.json in root (parent of src)
+      fs.writeFileSync(
+        path.join(tempDir, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { jsx: 'react-jsx' } })
+      );
+
+      // Run from subdirectory
+      const result = await detectCircularDependencies(subDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      expect(result.strictModeDetection.enabled).toBe(true);
+      expect(result.strictModeDetection.reason).toBe('auto-detected');
+      expect(result.strictModeDetection.tsconfigPath).toContain('tsconfig.json');
     });
   });
 });
