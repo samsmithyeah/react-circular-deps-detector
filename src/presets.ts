@@ -17,6 +17,10 @@ export interface LibraryPreset {
   stableHooks: string[];
   /** Hooks that return unstable references (new object each render) */
   unstableHooks: string[];
+  /** Regex patterns for hooks that return stable references (e.g., /^use\w+Store$/ for Zustand) */
+  stableHookPatterns?: RegExp[];
+  /** Regex patterns for hooks that return unstable references */
+  unstableHookPatterns?: RegExp[];
   /** Custom function configurations */
   customFunctions?: Record<
     string,
@@ -136,12 +140,14 @@ export const LIBRARY_PRESETS: LibraryPreset[] = [
     packages: ['zustand'],
     stableHooks: [
       // Zustand store hooks return stable references
-      // Note: The actual hook name is user-defined (e.g., useStore, useBearStore)
-      // This preset handles the common patterns
       'useStore',
       'useShallow', // Shallow comparison helper
+      'useStoreWithEqualityFn',
     ],
     unstableHooks: [],
+    // Zustand convention: user-defined hooks follow pattern useXxxStore
+    // e.g., useAuthStore, useCartStore, useUserStore
+    stableHookPatterns: [/^use\w+Store$/],
     customFunctions: {
       // Store.getState() is always stable
       getState: { stable: true },
@@ -265,6 +271,30 @@ export const LIBRARY_PRESETS: LibraryPreset[] = [
       'useLinkProps',
       'useMatchRoute',
       'useBlocker',
+    ],
+    unstableHooks: [],
+  },
+  {
+    name: 'Expo Router',
+    packages: ['expo-router'],
+    stableHooks: [
+      // Navigation hooks - return stable references
+      'useRouter',
+      'useNavigation',
+      'useNavigationContainerRef',
+      'useRootNavigation',
+      'useRootNavigationState',
+      // Route parameter hooks - return stable objects
+      'useLocalSearchParams',
+      'useGlobalSearchParams',
+      'useSearchParams',
+      // Route info hooks
+      'useSegments',
+      'usePathname',
+      'useUnstableGlobalHref',
+      // Focus/state hooks
+      'useFocusEffect',
+      'useIsFocused',
     ],
     unstableHooks: [],
   },
@@ -523,10 +553,14 @@ export function detectApplicablePresets(dependencies: Record<string, string>): L
 export function mergePresets(presets: LibraryPreset[]): {
   stableHooks: string[];
   unstableHooks: string[];
+  stableHookPatterns: RegExp[];
+  unstableHookPatterns: RegExp[];
   customFunctions: Record<string, { stable?: boolean; deferred?: boolean }>;
 } {
   const stableHooks = new Set<string>();
   const unstableHooks = new Set<string>();
+  const stableHookPatterns: RegExp[] = [];
+  const unstableHookPatterns: RegExp[] = [];
   const customFunctions: Record<string, { stable?: boolean; deferred?: boolean }> = {};
 
   for (const preset of presets) {
@@ -535,6 +569,12 @@ export function mergePresets(presets: LibraryPreset[]): {
     }
     for (const hook of preset.unstableHooks) {
       unstableHooks.add(hook);
+    }
+    if (preset.stableHookPatterns) {
+      stableHookPatterns.push(...preset.stableHookPatterns);
+    }
+    if (preset.unstableHookPatterns) {
+      unstableHookPatterns.push(...preset.unstableHookPatterns);
     }
     if (preset.customFunctions) {
       Object.assign(customFunctions, preset.customFunctions);
@@ -550,6 +590,8 @@ export function mergePresets(presets: LibraryPreset[]): {
   return {
     stableHooks: Array.from(stableHooks),
     unstableHooks: Array.from(unstableHooks),
+    stableHookPatterns,
+    unstableHookPatterns,
     customFunctions,
   };
 }

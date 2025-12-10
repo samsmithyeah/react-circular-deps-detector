@@ -164,6 +164,10 @@ export interface AnalyzerOptions {
   stableHooks?: string[];
   /** Hooks known to return unstable references */
   unstableHooks?: string[];
+  /** Regex patterns for hooks that return stable references (e.g., /^use\w+Store$/ for Zustand) */
+  stableHookPatterns?: RegExp[];
+  /** Regex patterns for hooks that return unstable references */
+  unstableHookPatterns?: RegExp[];
   /** Custom function stability settings */
   customFunctions?: Record<
     string,

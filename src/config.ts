@@ -19,6 +19,19 @@ export interface RcdConfig {
   unstableHooks?: string[];
 
   /**
+   * Regex patterns for hooks that return stable references.
+   * Useful for libraries like Zustand where hook names follow a pattern (e.g., useXxxStore).
+   * @example [/^use\w+Store$/]
+   */
+  stableHookPatterns?: RegExp[];
+
+  /**
+   * Regex patterns for hooks that return unstable references.
+   * @example [/^useUnstable\w+$/]
+   */
+  unstableHookPatterns?: RegExp[];
+
+  /**
    * Files or patterns to ignore during analysis
    * Example: ["src/generated", "*.test.tsx"]
    */
@@ -91,6 +104,8 @@ const CONFIG_FILES = ['rld.config.js', 'rld.config.json', '.rldrc', '.rldrc.json
 export const DEFAULT_CONFIG: Required<RcdConfig> = {
   stableHooks: [],
   unstableHooks: [],
+  stableHookPatterns: [],
+  unstableHookPatterns: [],
   ignore: [],
   minSeverity: 'low',
   minConfidence: 'medium', // Default to medium to reduce false positives
@@ -161,6 +176,8 @@ export function loadConfigWithInfo(
         presetConfig = {
           stableHooks: merged.stableHooks,
           unstableHooks: merged.unstableHooks,
+          stableHookPatterns: merged.stableHookPatterns,
+          unstableHookPatterns: merged.unstableHookPatterns,
           customFunctions: merged.customFunctions,
         };
 
@@ -276,6 +293,11 @@ export function mergeConfig(
   return {
     stableHooks: [...defaults.stableHooks, ...(userConfig.stableHooks || [])],
     unstableHooks: [...defaults.unstableHooks, ...(userConfig.unstableHooks || [])],
+    stableHookPatterns: [...defaults.stableHookPatterns, ...(userConfig.stableHookPatterns || [])],
+    unstableHookPatterns: [
+      ...defaults.unstableHookPatterns,
+      ...(userConfig.unstableHookPatterns || []),
+    ],
     ignore: [...defaults.ignore, ...(userConfig.ignore || [])],
     minSeverity: userConfig.minSeverity ?? defaults.minSeverity,
     minConfidence: userConfig.minConfidence ?? defaults.minConfidence,
