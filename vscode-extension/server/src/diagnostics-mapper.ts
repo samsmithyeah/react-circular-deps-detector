@@ -12,6 +12,36 @@ import type { HookAnalysis, CrossFileCycle } from 'react-loop-detector';
 import { fileUriToPath } from './utils.js';
 
 /**
+ * Information about a variable declaration found in the document
+ */
+interface VariableDeclaration {
+  /** The line number (0-indexed) where the variable is declared */
+  line: number;
+  /** The column where the declaration starts */
+  startColumn: number;
+  /** The column where the declaration ends */
+  endColumn: number;
+  /** The full line text */
+  lineText: string;
+  /** The indentation of the line */
+  indent: string;
+  /** The variable type (const, let, var, function) */
+  declarationType: 'const' | 'let' | 'var' | 'function';
+  /** The right-hand side of the assignment (for const/let/var) */
+  initializerText?: string;
+  /** Start column of the initializer */
+  initializerStart?: number;
+  /** End column of the initializer */
+  initializerEnd?: number;
+  /** Whether this is an arrow function or regular function */
+  isArrowFunction?: boolean;
+  /** Whether this is a function declaration (not expression) */
+  isFunctionDeclaration?: boolean;
+  /** The function body for function declarations */
+  functionBody?: string;
+}
+
+/**
  * Maps HookAnalysis results to LSP Diagnostics
  */
 export function mapAnalysisToDiagnostics(
@@ -193,6 +223,689 @@ function getFileName(filePath: string): string {
 }
 
 /**
+ * Find a variable declaration in the document by name.
+ * Searches for patterns like:
+ * - const varName = ...
+ * - let varName = ...
+ * - var varName = ...
+ * - function varName(...) { ... }
+ */
+function findVariableDeclaration(
+  documentText: string,
+  varName: string,
+  beforeLine: number
+): VariableDeclaration | null {
+  const lines = documentText.split('\n');
+
+  // Search backwards from the hook line to find the variable declaration
+  for (let lineIndex = beforeLine - 1; lineIndex >= 0; lineIndex--) {
+    const line = lines[lineIndex];
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+
+    // Check for const/let/var declarations with various patterns
+    // Pattern: const varName = value;
+    const varDeclRegex = new RegExp(
+      `^(\\s*)(const|let|var)\\s+${escapeRegExp(varName)}\\s*=\\s*(.+)$`
+    );
+    const varMatch = line.match(varDeclRegex);
+
+    if (varMatch) {
+      const [, , declType, initializer] = varMatch;
+      const initializerStart = line.indexOf('=') + 1;
+      // Find the actual start of the initializer (skip whitespace after =)
+      const initializerStartTrimmed = line.indexOf(initializer.trim(), initializerStart);
+
+      // Check if this is a single-line declaration or spans multiple lines
+      let fullInitializer = initializer.trimEnd();
+      let endLine = lineIndex;
+
+      // Handle multi-line declarations (object literals, arrow functions, etc.)
+      if (!isBalanced(fullInitializer)) {
+        // Collect lines until we find a balanced expression
+        for (let i = lineIndex + 1; i < lines.length && i < beforeLine; i++) {
+          fullInitializer += '\n' + lines[i];
+          endLine = i;
+          if (isBalanced(fullInitializer)) break;
+        }
+      }
+
+      // Remove trailing semicolon if present
+      fullInitializer = fullInitializer.replace(/;\s*$/, '');
+
+      // Detect arrow function
+      const isArrow = /^\s*(\([^)]*\)|[a-zA-Z_$][a-zA-Z0-9_$]*)\s*=>/.test(fullInitializer);
+
+      return {
+        line: lineIndex,
+        startColumn: indent.length,
+        endColumn: lines[endLine].length,
+        lineText: line,
+        indent,
+        declarationType: declType as 'const' | 'let' | 'var',
+        initializerText: fullInitializer,
+        initializerStart: initializerStartTrimmed,
+        initializerEnd: lines[endLine].length,
+        isArrowFunction: isArrow,
+      };
+    }
+
+    // Check for function declarations: function varName(...) { ... }
+    const funcDeclRegex = new RegExp(`^(\\s*)function\\s+${escapeRegExp(varName)}\\s*\\(`);
+    const funcMatch = line.match(funcDeclRegex);
+
+    if (funcMatch) {
+      // Find the full function body by tracking braces
+      let fullFunction = line;
+      let endLine = lineIndex;
+
+      if (!isBalanced(fullFunction)) {
+        for (let i = lineIndex + 1; i < lines.length && i < beforeLine + 50; i++) {
+          fullFunction += '\n' + lines[i];
+          endLine = i;
+          if (isBalanced(fullFunction)) break;
+        }
+      }
+
+      return {
+        line: lineIndex,
+        startColumn: indent.length,
+        endColumn: lines[endLine].length,
+        lineText: line,
+        indent,
+        declarationType: 'function',
+        isFunctionDeclaration: true,
+        functionBody: fullFunction,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check if parentheses, brackets, and braces are balanced in a string
+ */
+function isBalanced(text: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let stringChar = '';
+  let inTemplate = false;
+  let templateDepth = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const prevChar = i > 0 ? text[i - 1] : '';
+
+    // Handle string escapes
+    if (prevChar === '\\' && (inString || inTemplate)) continue;
+
+    // Handle string literals
+    if ((char === '"' || char === "'") && !inTemplate) {
+      if (inString && stringChar === char) {
+        inString = false;
+      } else if (!inString) {
+        inString = true;
+        stringChar = char;
+      }
+      continue;
+    }
+
+    // Handle template literals
+    if (char === '`') {
+      if (inTemplate && templateDepth === 0) {
+        inTemplate = false;
+      } else if (!inString) {
+        inTemplate = true;
+      }
+      continue;
+    }
+
+    if (inString) continue;
+
+    // Handle ${} in template literals
+    if (inTemplate && char === '$' && text[i + 1] === '{') {
+      templateDepth++;
+      continue;
+    }
+
+    // Track brackets
+    if (char === '(' || char === '[' || char === '{') {
+      if (inTemplate && char === '{' && prevChar === '$') {
+        // This is ${ in a template, already counted
+      } else {
+        stack.push(char);
+      }
+    } else if (char === ')' || char === ']' || char === '}') {
+      if (inTemplate && char === '}' && templateDepth > 0) {
+        templateDepth--;
+        continue;
+      }
+      const expected = char === ')' ? '(' : char === ']' ? '[' : '{';
+      if (stack.length === 0 || stack[stack.length - 1] !== expected) {
+        return false;
+      }
+      stack.pop();
+    }
+  }
+
+  return stack.length === 0 && !inString;
+}
+
+/**
+ * Escape special regex characters in a string
+ */
+function escapeRegExp(string: string): string {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Check if a React hook import exists in the document
+ */
+function hasReactHookImport(documentText: string, hookName: string): boolean {
+  // Check for various import patterns
+  const patterns = [
+    // import { useMemo } from 'react'
+    new RegExp(`import\\s*{[^}]*\\b${hookName}\\b[^}]*}\\s*from\\s*['"]react['"]`),
+    // import React, { useMemo } from 'react'
+    new RegExp(`import\\s+React\\s*,\\s*{[^}]*\\b${hookName}\\b[^}]*}\\s*from\\s*['"]react['"]`),
+    // import * as React from 'react' (can use React.useMemo)
+    /import\s+\*\s+as\s+React\s+from\s*['"]react['"]/,
+    // import React from 'react' (can use React.useMemo)
+    /import\s+React\s+from\s*['"]react['"]/,
+  ];
+
+  return patterns.some((pattern) => pattern.test(documentText));
+}
+
+/**
+ * Find the position to insert a new hook import
+ * Returns the position and whether to add to existing import or create new
+ */
+function findImportInsertPosition(
+  documentText: string,
+  hookName: string
+): { line: number; edit: string; replaceRange?: Range } | null {
+  const lines = documentText.split('\n');
+
+  // First, check if there's an existing React import with destructuring we can extend
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Match: import { ... } from 'react'
+    const destructureMatch = line.match(
+      /^(\s*import\s*{\s*)([^}]*)(\s*}\s*from\s*['"]react['"];?\s*)$/
+    );
+    if (destructureMatch) {
+      const [, prefix, existingImports, suffix] = destructureMatch;
+      const imports = existingImports.split(',').map((s) => s.trim());
+
+      // Check if hook is already imported
+      if (imports.includes(hookName)) {
+        return null; // Already imported
+      }
+
+      // Add the hook to existing imports
+      const newImports = [...imports, hookName].join(', ');
+      return {
+        line: i,
+        edit: `${prefix}${newImports}${suffix}`,
+        replaceRange: {
+          start: Position.create(i, 0),
+          end: Position.create(i, line.length),
+        },
+      };
+    }
+
+    // Match: import React, { ... } from 'react'
+    const reactDestructureMatch = line.match(
+      /^(\s*import\s+React\s*,\s*{\s*)([^}]*)(\s*}\s*from\s*['"]react['"];?\s*)$/
+    );
+    if (reactDestructureMatch) {
+      const [, prefix, existingImports, suffix] = reactDestructureMatch;
+      const imports = existingImports.split(',').map((s) => s.trim());
+
+      if (imports.includes(hookName)) {
+        return null; // Already imported
+      }
+
+      const newImports = [...imports, hookName].join(', ');
+      return {
+        line: i,
+        edit: `${prefix}${newImports}${suffix}`,
+        replaceRange: {
+          start: Position.create(i, 0),
+          end: Position.create(i, line.length),
+        },
+      };
+    }
+  }
+
+  // If no destructuring import found, look for other React imports to add after
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // After any React import, add a new line
+    if (/import\s+.*from\s*['"]react['"]/.test(line)) {
+      return {
+        line: i + 1,
+        edit: `import { ${hookName} } from 'react';\n`,
+      };
+    }
+  }
+
+  // No React import found - add at the top after any 'use strict' or comments
+  let insertLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === '' || line.startsWith('//') || line.startsWith('/*') || line === "'use strict';") {
+      insertLine = i + 1;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    line: insertLine,
+    edit: `import { ${hookName} } from 'react';\n`,
+  };
+}
+
+/**
+ * Create a "Wrap in useMemo" quick fix action for RLD-400 (unstable object)
+ */
+function createWrapInUseMemoAction(
+  diagnostic: Diagnostic,
+  uri: string,
+  documentText: string,
+  varName: string
+): CodeAction | null {
+  const declaration = findVariableDeclaration(
+    documentText,
+    varName,
+    diagnostic.range.start.line + 1 // Convert from 0-indexed
+  );
+
+  if (!declaration || !declaration.initializerText) {
+    return null;
+  }
+
+  // Don't offer wrap if it's already a hook call
+  if (/^(useMemo|useCallback|useRef)\s*\(/.test(declaration.initializerText.trim())) {
+    return null;
+  }
+
+  const edits: TextEdit[] = [];
+  const lines = documentText.split('\n');
+
+  // Calculate the range to replace (the initializer)
+  const initText = declaration.initializerText;
+
+  // For objects, wrap in useMemo(() => ({ ... }), [])
+  // For arrays, wrap in useMemo(() => [...], [])
+  // For function calls, wrap in useMemo(() => fnCall(), [])
+  let wrappedCode: string;
+  const trimmedInit = initText.trim();
+
+  if (trimmedInit.startsWith('{')) {
+    // Object literal - need parentheses around it in arrow function
+    wrappedCode = `useMemo(() => (${initText}), [])`;
+  } else {
+    wrappedCode = `useMemo(() => ${initText}, [])`;
+  }
+
+  // Find the exact position of the initializer
+  // The declaration line contains: const varName = <initializer>;
+  const declLine = lines[declaration.line];
+  const equalsIndex = declLine.indexOf('=');
+
+  if (equalsIndex === -1) {
+    return null;
+  }
+
+  // Find where the initializer starts (after = and whitespace)
+  const afterEquals = declLine.substring(equalsIndex + 1);
+  const whitespaceMatch = afterEquals.match(/^(\s*)/);
+  const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+
+  // Calculate end position (handle multi-line)
+  let endLine = declaration.line;
+  let endCol = declLine.length;
+
+  // If multi-line, find the actual end
+  if (initText.includes('\n')) {
+    const initLines = initText.split('\n');
+    endLine = declaration.line + initLines.length - 1;
+    endCol = lines[endLine].length;
+  }
+
+  // Remove trailing semicolon from end position if present
+  const lastLine = lines[endLine];
+  const semiMatch = lastLine.match(/;\s*$/);
+  if (semiMatch) {
+    endCol = lastLine.length - semiMatch[0].length;
+  }
+
+  // Create the text edit for wrapping
+  edits.push(
+    TextEdit.replace(
+      {
+        start: Position.create(declaration.line, initStartCol),
+        end: Position.create(endLine, endCol),
+      },
+      wrappedCode
+    )
+  );
+
+  // Add import if needed
+  if (!hasReactHookImport(documentText, 'useMemo')) {
+    const importEdit = findImportInsertPosition(documentText, 'useMemo');
+    if (importEdit) {
+      if (importEdit.replaceRange) {
+        edits.push(TextEdit.replace(importEdit.replaceRange, importEdit.edit));
+      } else {
+        edits.push(TextEdit.insert(Position.create(importEdit.line, 0), importEdit.edit));
+      }
+    }
+  }
+
+  return {
+    title: `Wrap '${varName}' in useMemo`,
+    kind: CodeActionKind.QuickFix,
+    diagnostics: [diagnostic],
+    isPreferred: true,
+    edit: {
+      changes: {
+        [uri]: edits,
+      },
+    },
+  };
+}
+
+/**
+ * Create a "Wrap in useCallback" quick fix action for RLD-402 (unstable function)
+ */
+function createWrapInUseCallbackAction(
+  diagnostic: Diagnostic,
+  uri: string,
+  documentText: string,
+  varName: string
+): CodeAction | null {
+  const declaration = findVariableDeclaration(
+    documentText,
+    varName,
+    diagnostic.range.start.line + 1
+  );
+
+  if (!declaration) {
+    return null;
+  }
+
+  const edits: TextEdit[] = [];
+  const lines = documentText.split('\n');
+
+  // Handle function declarations: function foo() { ... }
+  if (declaration.isFunctionDeclaration && declaration.functionBody) {
+    // Convert function declaration to const with useCallback
+    // function foo(args) { body } -> const foo = useCallback((args) => { body }, []);
+
+    const funcBody = declaration.functionBody;
+
+    // Extract function params and body
+    const funcMatch = funcBody.match(/function\s+\w+\s*\(([^)]*)\)\s*(\{[\s\S]*\})\s*$/);
+
+    if (!funcMatch) {
+      return null;
+    }
+
+    const [, params, body] = funcMatch;
+    const wrappedCode = `const ${varName} = useCallback((${params}) => ${body}, []);`;
+
+    // Find the end of the function declaration
+    let endLine = declaration.line;
+    let braceCount = 0;
+    let foundStart = false;
+
+    for (let i = declaration.line; i < lines.length; i++) {
+      const line = lines[i];
+      for (const char of line) {
+        if (char === '{') {
+          foundStart = true;
+          braceCount++;
+        } else if (char === '}') {
+          braceCount--;
+          if (foundStart && braceCount === 0) {
+            endLine = i;
+            break;
+          }
+        }
+      }
+      if (foundStart && braceCount === 0) break;
+    }
+
+    edits.push(
+      TextEdit.replace(
+        {
+          start: Position.create(declaration.line, declaration.indent.length),
+          end: Position.create(endLine, lines[endLine].length),
+        },
+        wrappedCode
+      )
+    );
+  } else if (declaration.initializerText && declaration.isArrowFunction) {
+    // Arrow function: const foo = () => { ... }
+    // -> const foo = useCallback(() => { ... }, []);
+
+    const initText = declaration.initializerText;
+    const wrappedCode = `useCallback(${initText}, [])`;
+
+    // Find initializer position
+    const declLine = lines[declaration.line];
+    const equalsIndex = declLine.indexOf('=');
+
+    if (equalsIndex === -1) {
+      return null;
+    }
+
+    const afterEquals = declLine.substring(equalsIndex + 1);
+    const whitespaceMatch = afterEquals.match(/^(\s*)/);
+    const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+
+    // Calculate end position
+    let endLine = declaration.line;
+    let endCol = declLine.length;
+
+    if (initText.includes('\n')) {
+      const initLines = initText.split('\n');
+      endLine = declaration.line + initLines.length - 1;
+      endCol = lines[endLine].length;
+    }
+
+    // Remove trailing semicolon
+    const lastLine = lines[endLine];
+    const semiMatch = lastLine.match(/;\s*$/);
+    if (semiMatch) {
+      endCol = lastLine.length - semiMatch[0].length;
+    }
+
+    edits.push(
+      TextEdit.replace(
+        {
+          start: Position.create(declaration.line, initStartCol),
+          end: Position.create(endLine, endCol),
+        },
+        wrappedCode
+      )
+    );
+  } else if (declaration.initializerText) {
+    // Regular function expression: const foo = function() { ... }
+    const initText = declaration.initializerText;
+
+    // Check if it starts with 'function'
+    if (!initText.trim().startsWith('function')) {
+      return null;
+    }
+
+    // Convert to arrow function in useCallback
+    const funcMatch = initText.match(/function\s*\(([^)]*)\)\s*(\{[\s\S]*\})\s*$/);
+    if (!funcMatch) {
+      return null;
+    }
+
+    const [, params, body] = funcMatch;
+    const wrappedCode = `useCallback((${params}) => ${body}, [])`;
+
+    // Find initializer position
+    const declLine = lines[declaration.line];
+    const equalsIndex = declLine.indexOf('=');
+
+    if (equalsIndex === -1) {
+      return null;
+    }
+
+    const afterEquals = declLine.substring(equalsIndex + 1);
+    const whitespaceMatch = afterEquals.match(/^(\s*)/);
+    const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+
+    // Calculate end position
+    let endLine = declaration.line;
+    let endCol = declLine.length;
+
+    if (initText.includes('\n')) {
+      const initLines = initText.split('\n');
+      endLine = declaration.line + initLines.length - 1;
+      endCol = lines[endLine].length;
+    }
+
+    const lastLine = lines[endLine];
+    const semiMatch = lastLine.match(/;\s*$/);
+    if (semiMatch) {
+      endCol = lastLine.length - semiMatch[0].length;
+    }
+
+    edits.push(
+      TextEdit.replace(
+        {
+          start: Position.create(declaration.line, initStartCol),
+          end: Position.create(endLine, endCol),
+        },
+        wrappedCode
+      )
+    );
+  } else {
+    return null;
+  }
+
+  // Add import if needed
+  if (!hasReactHookImport(documentText, 'useCallback')) {
+    const importEdit = findImportInsertPosition(documentText, 'useCallback');
+    if (importEdit) {
+      if (importEdit.replaceRange) {
+        edits.push(TextEdit.replace(importEdit.replaceRange, importEdit.edit));
+      } else {
+        edits.push(TextEdit.insert(Position.create(importEdit.line, 0), importEdit.edit));
+      }
+    }
+  }
+
+  return {
+    title: `Wrap '${varName}' in useCallback`,
+    kind: CodeActionKind.QuickFix,
+    diagnostics: [diagnostic],
+    isPreferred: true,
+    edit: {
+      changes: {
+        [uri]: edits,
+      },
+    },
+  };
+}
+
+/**
+ * Create an "Add dependency array" quick fix action for RLD-500
+ */
+function createAddDependencyArrayAction(
+  diagnostic: Diagnostic,
+  uri: string,
+  documentText: string
+): CodeAction | null {
+  const lines = documentText.split('\n');
+  const lineIndex = diagnostic.range.start.line;
+
+  if (lineIndex < 0 || lineIndex >= lines.length) {
+    return null;
+  }
+
+  // Find the hook call on this line or nearby lines
+  let hookText = '';
+
+  // Collect lines that might be part of the hook call
+  for (let i = lineIndex; i < Math.min(lineIndex + 20, lines.length); i++) {
+    hookText += lines[i] + '\n';
+    if (isBalanced(hookText) && hookText.includes(')')) {
+      break;
+    }
+  }
+
+  // Find the useEffect/useLayoutEffect call
+  const hookMatch = hookText.match(/(useEffect|useLayoutEffect)\s*\(\s*/);
+  if (!hookMatch) {
+    return null;
+  }
+
+  // Find the closing parenthesis of the hook call
+  // We need to find where to insert the dependency array (before the final ))
+  const hookStartIndex = hookText.indexOf(hookMatch[0]);
+  let parenDepth = 0;
+  let lastCloseParen = -1;
+
+  for (let i = hookStartIndex; i < hookText.length; i++) {
+    const char = hookText[i];
+    if (char === '(') {
+      parenDepth++;
+    } else if (char === ')') {
+      parenDepth--;
+      if (parenDepth === 0) {
+        lastCloseParen = i;
+        break;
+      }
+    }
+  }
+
+  if (lastCloseParen === -1) {
+    return null;
+  }
+
+  // Calculate the actual position in the document
+  // Count newlines to find the line and column
+  let currentLine = lineIndex;
+  let currentCol = 0;
+
+  for (let i = 0; i < lastCloseParen; i++) {
+    if (hookText[i] === '\n') {
+      currentLine++;
+      currentCol = 0;
+    } else {
+      currentCol++;
+    }
+  }
+
+  // The position where we want to insert ", []"
+  const insertPos = Position.create(currentLine, currentCol);
+
+  return {
+    title: 'Add empty dependency array',
+    kind: CodeActionKind.QuickFix,
+    diagnostics: [diagnostic],
+    isPreferred: true,
+    edit: {
+      changes: {
+        [uri]: [TextEdit.insert(insertPos, ', []')],
+      },
+    },
+  };
+}
+
+/**
  * Generate code actions (quick fixes) for a diagnostic
  */
 export function generateCodeActions(
@@ -202,11 +915,57 @@ export function generateCodeActions(
 ): CodeAction[] {
   const actions: CodeAction[] = [];
   const data = diagnostic.data as
-    | { errorCode?: string; line?: number; files?: string[] }
+    | {
+        errorCode?: string;
+        line?: number;
+        files?: string[];
+        problematicDependency?: string;
+        hookType?: string;
+      }
     | undefined;
 
   if (!data?.errorCode) {
     return actions;
+  }
+
+  // Add quick fix actions based on error code
+  const errorCode = data.errorCode;
+  const varName = data.problematicDependency;
+
+  // RLD-400: Unstable object in deps -> Wrap in useMemo
+  // RLD-401: Unstable array in deps -> Wrap in useMemo
+  // RLD-403: Unstable function call result -> Wrap in useMemo
+  if ((errorCode === 'RLD-400' || errorCode === 'RLD-401' || errorCode === 'RLD-403') && varName) {
+    const useMemoAction = createWrapInUseMemoAction(
+      diagnostic,
+      textDocumentUri,
+      documentText,
+      varName
+    );
+    if (useMemoAction) {
+      actions.push(useMemoAction);
+    }
+  }
+
+  // RLD-402: Unstable function in deps -> Wrap in useCallback
+  if (errorCode === 'RLD-402' && varName) {
+    const useCallbackAction = createWrapInUseCallbackAction(
+      diagnostic,
+      textDocumentUri,
+      documentText,
+      varName
+    );
+    if (useCallbackAction) {
+      actions.push(useCallbackAction);
+    }
+  }
+
+  // RLD-500: Missing dependency array -> Add empty deps array
+  if (errorCode === 'RLD-500') {
+    const addDepsAction = createAddDependencyArrayAction(diagnostic, textDocumentUri, documentText);
+    if (addDepsAction) {
+      actions.push(addDepsAction);
+    }
   }
 
   // Add "ignore this line" action
