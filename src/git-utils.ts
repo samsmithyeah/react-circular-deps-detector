@@ -128,7 +128,7 @@ export function getChangedFilesSinceRef(options: GitChangedFilesOptions): GitCha
       });
     } catch {
       // If the three-dot syntax fails (e.g., for initial commits), try two-dot
-      committedDiff = execFileSync('git', ['diff', '--name-only', compareRef], {
+      committedDiff = execFileSync('git', ['diff', '--name-only', compareRef, 'HEAD'], {
         cwd,
         stdio: 'pipe',
         encoding: 'utf-8',
