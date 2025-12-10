@@ -802,7 +802,7 @@ program
   .option('--min-severity <level>', 'Minimum severity to report (high, medium, low)', 'low')
   .option(
     '--min-confidence <level>',
-    'Minimum confidence to report (high, medium, low). Default: medium',
+    'Minimum confidence to report (high, medium, low). Default: medium (hides uncertain detections)',
     'medium'
   )
   .option('--confirmed-only', 'Only report confirmed infinite loops')

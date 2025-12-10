@@ -110,6 +110,8 @@ function mapCycleToDiagnostic(cycle: CrossFileCycle, currentFile: string): Diagn
       errorCode: 'RLD-300',
       cycleType: cycle.type,
       files: cycle.files,
+      issueSeverity: 'high' as const,
+      confidence: 'high' as const,
     },
   };
 }
@@ -342,11 +344,13 @@ export function filterDiagnostics(
       | undefined;
 
     // Get original severity from data (not the mapped DiagnosticSeverity)
-    // Cross-file cycle diagnostics (RLD-300) don't have these fields in their data,
-    // but they are high severity/confidence issues that shouldn't be filtered out
-    const isCrossFileCycle = diagnostic.code === 'RLD-300';
-    const issueSeverity = data?.issueSeverity || (isCrossFileCycle ? 'high' : 'medium');
-    const confidence = data?.confidence || (isCrossFileCycle ? 'high' : 'medium');
+    const issueSeverity = data?.issueSeverity;
+    const confidence = data?.confidence;
+
+    // If data is missing, don't filter out (be safe - show the diagnostic)
+    if (!issueSeverity || !confidence) {
+      return true;
+    }
 
     // Filter by both severity and confidence
     return (
