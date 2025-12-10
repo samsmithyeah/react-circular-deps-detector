@@ -27,6 +27,8 @@ interface CliOptions {
   strict?: boolean;
   tsconfigPath?: string;
   presets?: boolean; // Commander turns --no-presets into presets: false
+  since?: string; // Git ref to compare against (e.g., 'main', 'HEAD~5')
+  includeDependents?: boolean; // Include files that import changed files
 }
 
 // SARIF output types
@@ -361,6 +363,14 @@ program
   )
   .option('--tsconfig <path>', 'Path to tsconfig.json (for --strict mode)')
   .option('--no-presets', 'Disable auto-detection of library presets from package.json')
+  .option(
+    '--since <ref>',
+    'Only analyze files changed since git ref (e.g., main, HEAD~5, abc123). Essential for CI in large repos.'
+  )
+  .option(
+    '--include-dependents',
+    'When using --since, also analyze files that import changed files (finds indirect issues)'
+  )
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -380,6 +390,16 @@ program
       if (!options.json && !options.sarif) {
         console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
         console.log(chalk.gray(`Pattern: ${options.pattern}`));
+        if (options.since) {
+          console.log(
+            chalk.yellow(
+              `Changed files mode: Only analyzing files changed since '${options.since}'`
+            )
+          );
+          if (options.includeDependents) {
+            console.log(chalk.gray(`  Including files that import changed files`));
+          }
+        }
         if (options.strict) {
           console.log(
             chalk.yellow(`Strict mode enabled: Using TypeScript compiler for type-based analysis`)
@@ -396,6 +416,8 @@ program
         workers: options.workers,
         strict: options.strict,
         tsconfigPath: options.tsconfigPath,
+        since: options.since,
+        includeDependents: options.includeDependents,
         config: {
           minSeverity: options.minSeverity,
           minConfidence: options.minConfidence,

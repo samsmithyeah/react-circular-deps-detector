@@ -16,6 +16,8 @@ import {
 } from './config';
 import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
+import { getChangedFilesSinceRef } from './git-utils';
+import { createPathResolver } from './path-resolver';
 
 export interface CircularDependency {
   file: string;
@@ -54,6 +56,10 @@ export interface DetectorOptions {
   strict?: boolean;
   /** Custom path to tsconfig.json (for strict mode) */
   tsconfigPath?: string;
+  /** Only analyze files changed since this git ref (e.g., 'main', 'HEAD~5') */
+  since?: string;
+  /** When using --since, also include files that import the changed files */
+  includeDependents?: boolean;
 }
 
 // Minimum file count to benefit from parallel processing
@@ -76,10 +82,46 @@ export async function detectCircularDependencies(
   const mergedIgnore = [...options.ignore, ...(config.ignore || [])];
   const mergedOptions = { ...options, ignore: mergedIgnore };
 
-  const files = await findFiles(targetPath, mergedOptions);
+  // Get all files matching the pattern
+  const allFiles = await findFiles(targetPath, mergedOptions);
 
   // Filter to React files first
-  const reactFiles = files.filter((file) => isLikelyReactFile(file));
+  const allReactFiles = allFiles.filter((file) => isLikelyReactFile(file));
+
+  // Apply git-based filtering if --since is specified
+  let reactFiles: string[];
+  if (options.since) {
+    const gitResult = getChangedFilesSinceRef({
+      since: options.since,
+      cwd: targetPath,
+      extensions: ['.js', '.jsx', '.ts', '.tsx'],
+    });
+
+    if (!gitResult.isGitRepo) {
+      throw new Error(`Cannot use --since: "${targetPath}" is not inside a git repository`);
+    }
+
+    // Create a set of changed files for fast lookup
+    const changedFilesSet = new Set(gitResult.changedFiles);
+
+    // Filter to only files that are both React files AND changed
+    reactFiles = allReactFiles.filter((file) => changedFilesSet.has(file));
+
+    // If --include-dependents is specified, find files that import changed files
+    if (options.includeDependents && reactFiles.length > 0) {
+      // Scan all React files to find which ones import the changed files
+      const dependentFiles = await findFilesImportingChangedFiles(
+        allReactFiles,
+        changedFilesSet,
+        targetPath
+      );
+
+      // Combine changed files and their dependents, ensuring uniqueness
+      reactFiles = Array.from(new Set([...reactFiles, ...dependentFiles]));
+    }
+  } else {
+    reactFiles = allReactFiles;
+  }
 
   // Decide whether to use parallel processing
   // Use parallel if explicitly enabled OR if we have many files and it wasn't explicitly disabled
@@ -426,4 +468,52 @@ function isPrimitiveOrImported(varName: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Find files that import any of the changed files.
+ * Uses a lightweight regex-based approach to avoid full parsing overhead.
+ * Reads files in parallel for better performance on large codebases.
+ */
+async function findFilesImportingChangedFiles(
+  allFiles: string[],
+  changedFiles: Set<string>,
+  projectRoot: string
+): Promise<string[]> {
+  const pathResolver = createPathResolver({ projectRoot });
+
+  // Regex pattern to match import, require, and dynamic import() statements
+  // Group 1: static import path, Group 2: require path, Group 3: dynamic import path
+  const importRequirePattern =
+    /(?:import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"])|(?:require\s*\(\s*['"]([^'"]+)['"]\s*\))|(?:import\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
+
+  const filesToCheck = allFiles.filter((file) => !changedFiles.has(file));
+
+  const checkFilePromises = filesToCheck.map(async (file) => {
+    try {
+      const content = await fs.promises.readFile(file, 'utf-8');
+
+      // Create a new regex instance for each file (required for /g flag with exec)
+      const regex = new RegExp(importRequirePattern.source, importRequirePattern.flags);
+      let match;
+      while ((match = regex.exec(content)) !== null) {
+        // match[1] is for static imports, match[2] is for requires, match[3] is for dynamic imports
+        const importPath = match[1] || match[2] || match[3];
+        if (importPath) {
+          // Try to resolve the import - pathResolver handles aliases and returns null for external packages
+          const resolved = pathResolver.resolve(file, importPath);
+          if (resolved && changedFiles.has(resolved)) {
+            return file;
+          }
+        }
+      }
+    } catch (error) {
+      // Skip files that can't be read, but warn the user
+      console.warn(`Warning: Could not read file to check for dependents: ${file}`, error);
+    }
+    return null;
+  });
+
+  const results = await Promise.all(checkFilePromises);
+  return results.filter((file): file is string => file !== null);
 }
