@@ -109,8 +109,7 @@ export async function detectCircularDependencies(
 
     // If --include-dependents is specified, find files that import changed files
     if (options.includeDependents && reactFiles.length > 0) {
-      // We need to parse all React files to build the dependency graph
-      // Then find which files import the changed files
+      // Scan all React files to find which ones import the changed files
       const dependentFiles = findFilesImportingChangedFiles(
         allReactFiles,
         changedFilesSet,
@@ -487,10 +486,10 @@ function findFilesImportingChangedFiles(
   const pathResolver = createPathResolver({ projectRoot });
   const dependentFiles: string[] = [];
 
-  // Combined regex to match both import and require statements in a single pass
-  // Group 1: import path, Group 2: require path
+  // Combined regex to match import, require, and dynamic import() statements in a single pass
+  // Group 1: static import path, Group 2: require path, Group 3: dynamic import path
   const importRequireRegex =
-    /(?:import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"])|(?:require\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
+    /(?:import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?['"]([^'"]+)['"])|(?:require\s*\(\s*['"]([^'"]+)['"]\s*\))|(?:import\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
 
   for (const file of allFiles) {
     // Skip files that are already in the changed set
@@ -506,8 +505,8 @@ function findFilesImportingChangedFiles(
 
       let match;
       while ((match = importRequireRegex.exec(content)) !== null) {
-        // match[1] is for imports, match[2] is for requires
-        const importPath = match[1] || match[2];
+        // match[1] is for static imports, match[2] is for requires, match[3] is for dynamic imports
+        const importPath = match[1] || match[2] || match[3];
         if (importPath) {
           importPaths.push(importPath);
         }
@@ -532,7 +531,8 @@ function findFilesImportingChangedFiles(
         }
       }
     } catch {
-      // Skip files that can't be read
+      // Skip files that can't be read, but warn the user
+      console.warn(`Warning: Could not read file to check for dependents: ${file}`);
     }
   }
 
