@@ -434,7 +434,10 @@ program
               chalk.yellow(`Strict mode enabled: Using TypeScript compiler for type-based analysis`)
             );
           }
+        } else if (strictModeDetection.reason === 'disabled') {
+          console.log(chalk.gray('Strict mode disabled by flag or configuration.'));
         }
+        // Note: 'no-tsconfig' case is silent - no message needed for the common JS-only case
       }
 
       if (options.json) {

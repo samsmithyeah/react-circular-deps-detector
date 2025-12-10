@@ -137,7 +137,7 @@ function resolveStrictMode(
   }
 
   // 3. Auto-detect based on tsconfig.json presence
-  const detectedTsconfig = options.tsconfigPath || findTsConfig(targetPath);
+  const detectedTsconfig = options.tsconfigPath || config.tsconfigPath || findTsConfig(targetPath);
   if (detectedTsconfig) {
     return {
       enabled: true,
