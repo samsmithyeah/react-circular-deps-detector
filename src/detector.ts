@@ -514,25 +514,16 @@ function findFilesImportingChangedFiles(
 
       // Check if any import path resolves to a changed file
       for (const importPath of importPaths) {
-        // Skip external packages
-        if (
-          !importPath.startsWith('.') &&
-          !importPath.startsWith('@/') &&
-          !importPath.startsWith('~/')
-        ) {
-          continue;
-        }
-
-        // Try to resolve the import
+        // Try to resolve the import - pathResolver handles aliases and returns null for external packages
         const resolved = pathResolver.resolve(file, importPath);
         if (resolved && changedFiles.has(resolved)) {
           dependentFiles.push(file);
           break;
         }
       }
-    } catch {
+    } catch (error) {
       // Skip files that can't be read, but warn the user
-      console.warn(`Warning: Could not read file to check for dependents: ${file}`);
+      console.warn(`Warning: Could not read file to check for dependents: ${file}`, error);
     }
   }
 
