@@ -51,7 +51,7 @@ export function mapAnalysisToDiagnostics(
 }
 
 function mapIssueToDiagnostic(issue: HookAnalysis): Diagnostic {
-  const severity = mapSeverity(issue.severity, issue.category);
+  const severity = mapSeverity(issue.severity, issue.confidence, issue.category);
   const line = Math.max(0, issue.line - 1); // LSP is 0-indexed
   const column = issue.column ? Math.max(0, issue.column) : 0;
 
@@ -77,6 +77,8 @@ function mapIssueToDiagnostic(issue: HookAnalysis): Diagnostic {
       hookType: issue.hookType,
       problematicDependency: issue.problematicDependency,
       line: issue.line,
+      confidence: issue.confidence,
+      issueSeverity: issue.severity,
     },
   };
 }
@@ -108,20 +110,57 @@ function mapCycleToDiagnostic(cycle: CrossFileCycle, currentFile: string): Diagn
       errorCode: 'RLD-300',
       cycleType: cycle.type,
       files: cycle.files,
+      issueSeverity: 'high' as const,
+      confidence: 'high' as const,
     },
   };
 }
 
-function mapSeverity(severity: 'high' | 'medium' | 'low', category: string): DiagnosticSeverity {
-  // Critical issues are errors
-  if (category === 'critical') {
+/**
+ * Map issue severity and confidence to VS Code DiagnosticSeverity.
+ *
+ * The key principle: Only show red errors (Error) for issues that WILL crash the browser.
+ * If the tool isn't certain, downgrade to Warning or Hint to reduce alert fatigue.
+ *
+ * Mapping:
+ * - Critical + High confidence → Error (red squiggly) - guaranteed crash
+ * - Critical + Medium confidence → Warning (yellow) - likely crash but uncertain
+ * - Critical + Low confidence → Warning (yellow) - possible crash but uncertain
+ * - High severity + Low/Medium confidence → Warning (yellow)
+ * - Medium confidence (any severity) → Warning (yellow)
+ * - Low confidence → Hint (dots) - uncertain, needs manual review
+ * - Performance issues → Information (blue) with Unnecessary tag
+ */
+function mapSeverity(
+  severity: 'high' | 'medium' | 'low',
+  confidence: 'high' | 'medium' | 'low',
+  category: string
+): DiagnosticSeverity {
+  // Only critical issues with HIGH confidence should be errors (red squiggly)
+  // This is the "golden rule": if we show Error, the browser MUST crash
+  if (category === 'critical' && confidence === 'high') {
     return DiagnosticSeverity.Error;
   }
 
-  // Map by severity
+  // Low confidence issues should be Hints (dots, non-intrusive)
+  // These need manual review - we're not sure enough to warn strongly
+  if (confidence === 'low') {
+    return DiagnosticSeverity.Hint;
+  }
+
+  // Medium confidence or critical with non-high confidence → Warning
+  // We're fairly sure but not certain enough for an error
+  if (confidence === 'medium' || category === 'critical') {
+    return DiagnosticSeverity.Warning;
+  }
+
+  // High confidence, non-critical issues: map by severity
+  // Note: Even high severity non-critical issues should NOT be Error (red)
+  // because the "golden rule" says Error = guaranteed crash, and non-critical
+  // issues (performance, warnings) don't crash the browser
   switch (severity) {
     case 'high':
-      return DiagnosticSeverity.Error;
+      return DiagnosticSeverity.Warning;
     case 'medium':
       return DiagnosticSeverity.Warning;
     case 'low':
@@ -132,15 +171,15 @@ function mapSeverity(severity: 'high' | 'medium' | 'low', category: string): Dia
 }
 
 function formatMessage(issue: HookAnalysis): string {
-  // Use the explanation from the analysis, but make it more concise for the IDE
-  const baseMessage = issue.explanation;
+  // Use the explanation from the analysis
+  let message = issue.explanation;
 
-  // Add the problematic dependency if available
-  if (issue.problematicDependency && issue.problematicDependency !== 'N/A') {
-    return `${baseMessage} (dependency: ${issue.problematicDependency})`;
+  // Add the suggestion if available - this makes the message actionable
+  if (issue.suggestion) {
+    message += `\n\n💡 Fix: ${issue.suggestion}`;
   }
 
-  return baseMessage;
+  return message;
 }
 
 function normalizeFilePath(filePath: string): string {
@@ -293,27 +332,29 @@ function createIgnoreCodeAction(
 export function filterDiagnostics(
   diagnostics: Diagnostic[],
   minSeverity: 'high' | 'medium' | 'low',
-  _minConfidence: 'high' | 'medium' | 'low'
+  minConfidence: 'high' | 'medium' | 'low'
 ): Diagnostic[] {
-  // Note: confidence filtering would require storing confidence in diagnostic data
-  // For now, we only filter by severity
-  const severityOrder = { high: 3, medium: 2, low: 1 };
-  const minSeverityValue = severityOrder[minSeverity];
+  const levelOrder = { high: 3, medium: 2, low: 1 };
+  const minSeverityValue = levelOrder[minSeverity];
+  const minConfidenceValue = levelOrder[minConfidence];
 
   return diagnostics.filter((diagnostic) => {
-    // Map LSP severity back to our severity levels
-    let diagSeverity: 'high' | 'medium' | 'low';
-    switch (diagnostic.severity) {
-      case DiagnosticSeverity.Error:
-        diagSeverity = 'high';
-        break;
-      case DiagnosticSeverity.Warning:
-        diagSeverity = 'medium';
-        break;
-      default:
-        diagSeverity = 'low';
+    const data = diagnostic.data as
+      | { confidence?: 'high' | 'medium' | 'low'; issueSeverity?: 'high' | 'medium' | 'low' }
+      | undefined;
+
+    // Get original severity from data (not the mapped DiagnosticSeverity)
+    const issueSeverity = data?.issueSeverity;
+    const confidence = data?.confidence;
+
+    // If data is missing, don't filter out (be safe - show the diagnostic)
+    if (!issueSeverity || !confidence) {
+      return true;
     }
 
-    return severityOrder[diagSeverity] >= minSeverityValue;
+    // Filter by both severity and confidence
+    return (
+      levelOrder[issueSeverity] >= minSeverityValue && levelOrder[confidence] >= minConfidenceValue
+    );
   });
 }

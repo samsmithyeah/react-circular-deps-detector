@@ -137,8 +137,8 @@ function checkComponentBodyForSetState(
           stateReads: [],
           explanation:
             `'${calleeName}()' is called directly during render (in the component body). ` +
-            `This causes an infinite loop because each setState triggers a re-render, which calls setState again. ` +
-            `Fix: move the setState call into a useEffect, event handler, or callback.`,
+            `This causes an infinite loop because each setState triggers a re-render, which calls setState again.`,
+          suggestion: `Move '${calleeName}()' into a useEffect hook, event handler, or callback function.`,
         })
       );
     },

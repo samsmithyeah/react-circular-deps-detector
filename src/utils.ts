@@ -86,7 +86,7 @@ export function createAnalysis(params: CreateAnalysisParams): HookAnalysis {
     type: params.type,
     errorCode: params.errorCode,
     category: params.category,
-    description: `${params.hookType} ${params.type.replace(/-/g, ' ')}`,
+    description: getDescriptionForErrorCode(params.errorCode, params.hookType),
     file: params.file,
     line: params.line,
     column: params.column,
@@ -97,6 +97,7 @@ export function createAnalysis(params: CreateAnalysisParams): HookAnalysis {
     severity: params.severity,
     confidence: params.confidence,
     explanation: params.explanation,
+    suggestion: params.suggestion,
     actualStateModifications: params.actualStateModifications,
     stateReads: params.stateReads,
   };
@@ -107,6 +108,36 @@ export function createAnalysis(params: CreateAnalysisParams): HookAnalysis {
   }
 
   return result;
+}
+
+/**
+ * Get a human-readable description for an error code
+ */
+function getDescriptionForErrorCode(errorCode: string, hookType: string): string {
+  const descriptions: Record<string, string> = {
+    'RLD-100': 'setState during render phase',
+    'RLD-101': 'setState via function call during render',
+    'RLD-200': 'Unconditional setState in effect dependency loop',
+    'RLD-201': 'Missing dependency array with setState',
+    'RLD-202': 'Unconditional setState in useLayoutEffect',
+    'RLD-300': 'Cross-file infinite loop',
+    'RLD-301': 'Cross-file conditional modification',
+    'RLD-400': 'Unstable object in dependency array',
+    'RLD-401': 'Unstable array in dependency array',
+    'RLD-402': 'Unstable function in dependency array',
+    'RLD-403': 'Unstable function call in dependency array',
+    'RLD-404': 'Unstable Context.Provider value',
+    'RLD-405': 'Unstable prop to memoized component',
+    'RLD-406': 'Unstable callback in useCallback deps',
+    'RLD-407': 'Unstable getSnapshot in useSyncExternalStore',
+    'RLD-410': 'Object spread guard may not prevent loop',
+    'RLD-420': 'Memoized hook modifies its dependency',
+    'RLD-500': 'Missing dependency array',
+    'RLD-501': 'Conditional modification needs review',
+    'RLD-600': 'Ref mutation with state value',
+  };
+
+  return descriptions[errorCode] || `${hookType} issue`;
 }
 
 /**
@@ -215,4 +246,104 @@ export function isMemoCallExpression(node: t.Node | null | undefined): boolean {
       t.isIdentifier(callee.property) &&
       callee.property.name === 'memo')
   );
+}
+
+/**
+ * Check if strict mode (TypeScript type checking) is enabled.
+ */
+export function isStrictModeEnabled(): boolean {
+  return currentOptions.strictMode === true;
+}
+
+/**
+ * Confidence level type
+ */
+type ConfidenceLevel = 'high' | 'medium' | 'low';
+
+/**
+ * Adjust confidence level based on analysis context to reduce false positives.
+ *
+ * This implements "heuristic downgrading" - when the analyzer uses heuristics
+ * instead of definitive type information, we should be less confident.
+ *
+ * Downgrade rules:
+ * 1. If not in strict mode and detection relies on type inference → max medium
+ * 2. If cross-file chain is deeper than 2 levels → max medium
+ * 3. If the detection is for conditional code paths → max medium
+ *
+ * @param baseConfidence - The initial confidence level from detection
+ * @param context - Context about how the detection was made
+ * @returns Adjusted confidence level
+ */
+// Note: _adjustConfidence is available for future use in analyzer modules
+// that need to downgrade confidence based on context. Prefixed with _ to
+// satisfy the linter since it's not yet used.
+function _adjustConfidence(
+  baseConfidence: ConfidenceLevel,
+  context: {
+    /** Whether type inference was used (e.g., heuristic-based stability detection) */
+    usedTypeInference?: boolean;
+    /** Depth of cross-file call chain (1 = direct, 2+ = indirect) */
+    crossFileChainDepth?: number;
+    /** Whether the setter is inside conditional code */
+    isConditional?: boolean;
+    /** Whether strict mode (TypeScript type checker) is enabled */
+    isStrictMode?: boolean;
+  }
+): ConfidenceLevel {
+  let confidence = baseConfidence;
+
+  // Rule 1: If we used type inference without strict mode, downgrade from high to medium
+  // Rationale: Without TypeScript's actual type information, we're guessing based on naming conventions
+  if (context.usedTypeInference && !context.isStrictMode && confidence === 'high') {
+    confidence = 'medium';
+  }
+
+  // Rule 2: Deep cross-file chains are hard to trace statically
+  // More than 2 levels deep → downgrade from high to medium
+  if (context.crossFileChainDepth && context.crossFileChainDepth > 2 && confidence === 'high') {
+    confidence = 'medium';
+  }
+
+  // Rule 3: Conditional setters are inherently uncertain
+  // We can't know at static analysis time if the condition will prevent the loop
+  if (context.isConditional && confidence === 'high') {
+    confidence = 'medium';
+  }
+
+  return confidence;
+}
+
+/**
+ * Generate explanation suffix for why confidence was adjusted.
+ * Returns an empty string if no adjustment was made or if context doesn't require explanation.
+ */
+export function getConfidenceExplanation(
+  confidence: ConfidenceLevel,
+  context: {
+    usedTypeInference?: boolean;
+    crossFileChainDepth?: number;
+    isConditional?: boolean;
+    isStrictMode?: boolean;
+  }
+): string {
+  const reasons: string[] = [];
+
+  if (context.usedTypeInference && !context.isStrictMode) {
+    reasons.push('type information is inferred (enable --strict for higher accuracy)');
+  }
+
+  if (context.crossFileChainDepth && context.crossFileChainDepth > 2) {
+    reasons.push(`involves a ${context.crossFileChainDepth}-level cross-file dependency chain`);
+  }
+
+  if (context.isConditional) {
+    reasons.push('the setState is inside a conditional block');
+  }
+
+  if (reasons.length === 0) {
+    return '';
+  }
+
+  return ` Confidence is ${confidence} because ${reasons.join(', ')}.`;
 }

@@ -133,16 +133,19 @@ export function checkUnstableReferences(
         explanation: isConfirmedLoop
           ? `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
             `It gets a new reference on every render, and this ${hookName} has an unconditional setState, ` +
-            `causing an infinite re-render loop. ` +
-            `Fix: wrap with useMemo/useCallback, move outside the component, or remove from dependencies.`
+            `causing an infinite re-render loop.`
           : isUseEffect
             ? `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
               `It gets a new reference on every render, causing this ${hookName} to run on every render. ` +
-              `This is a performance issue but won't cause an infinite loop since setState calls are conditional. ` +
-              `Fix: wrap with useMemo/useCallback, move outside the component, or remove from dependencies.`
+              `This is a performance issue but won't cause an infinite loop since setState calls are conditional.`
             : `'${depName}' is a ${typeDescriptions[unstableVar.type]} created inside the component. ` +
-              `It gets a new reference on every render, causing unnecessary ${hookName} re-creation. ` +
-              `Fix: wrap with useMemo/useCallback or move outside the component.`,
+              `It gets a new reference on every render, causing unnecessary ${hookName} re-creation.`,
+        suggestion:
+          unstableVar.type === 'function'
+            ? `Wrap '${depName}' with useCallback, or move it outside the component.`
+            : unstableVar.type === 'function-call'
+              ? `Wrap the result of '${depName}' with useMemo, or move the call outside the component.`
+              : `Wrap '${depName}' with useMemo, move it outside the component, or remove it from dependencies.`,
         debugInfo: {
           reason: `Detected unstable ${unstableVar.type} '${depName}' in dependency array`,
           stateTracking: {

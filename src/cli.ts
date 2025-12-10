@@ -110,10 +110,14 @@ function generateSarifReport(results: DetectionResults): SarifReport {
   results.intelligentHooksAnalysis.forEach((issue) => {
     const level =
       issue.category === 'critical' ? 'error' : issue.category === 'warning' ? 'warning' : 'note';
+    // Include suggestion in message if available
+    const messageText = issue.suggestion
+      ? `${issue.explanation}\n\nFix: ${issue.suggestion}`
+      : issue.explanation;
     sarifResults.push({
       ruleId: issue.errorCode,
       level,
-      message: { text: issue.explanation },
+      message: { text: messageText },
       locations: [
         {
           physicalLocation: {
@@ -344,7 +348,11 @@ program
   .option('--parallel', 'Use parallel parsing with worker threads (faster for large projects)')
   .option('--workers <count>', 'Number of worker threads (default: CPU cores - 1)', parseInt)
   .option('--min-severity <level>', 'Minimum severity to report (high, medium, low)', 'low')
-  .option('--min-confidence <level>', 'Minimum confidence to report (high, medium, low)', 'low')
+  .option(
+    '--min-confidence <level>',
+    'Minimum confidence to report (high, medium, low). Default: medium (hides uncertain detections)',
+    'medium'
+  )
   .option('--confirmed-only', 'Only report confirmed infinite loops (not potential issues)')
   .option('--cache', 'Enable caching for faster repeated runs')
   .option(
@@ -556,6 +564,13 @@ function displayIssue(issue: HookAnalysis, showDebug?: boolean) {
     );
   }
   console.log();
+
+  // Show actionable suggestion if available
+  if (issue.suggestion) {
+    console.log(chalk.blue(`    💡 How to fix:`));
+    console.log(chalk.green(`       ${issue.suggestion}`));
+    console.log();
+  }
 
   // Show what the code is doing (only if it adds clarity)
   if (issue.actualStateModifications.length > 1 || issue.stateReads.length > 1) {
@@ -785,7 +800,11 @@ program
     '**/build/**',
   ])
   .option('--min-severity <level>', 'Minimum severity to report (high, medium, low)', 'low')
-  .option('--min-confidence <level>', 'Minimum confidence to report (high, medium, low)', 'low')
+  .option(
+    '--min-confidence <level>',
+    'Minimum confidence to report (high, medium, low). Default: medium (hides uncertain detections)',
+    'medium'
+  )
   .option('--confirmed-only', 'Only report confirmed infinite loops')
   .option('--compact', 'Compact output format')
   .action(async (targetPath: string, watchOptions: Partial<CliOptions>) => {

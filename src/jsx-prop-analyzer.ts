@@ -206,8 +206,8 @@ export function analyzeJsxProps(
           stateReads: [],
           explanation:
             `Context provider '${prop.componentName}' receives unstable ${typeDescriptions[prop.unstableVar.type]} '${prop.unstableVar.name}' as value. ` +
-            `This creates a new object reference on every render, causing all context consumers to re-render unnecessarily. ` +
-            `Fix: wrap the value with useMemo.`,
+            `This creates a new object reference on every render, causing all context consumers to re-render unnecessarily.`,
+          suggestion: `Wrap '${prop.unstableVar.name}' with useMemo to create a stable reference.`,
         })
       );
     } else {
@@ -244,8 +244,8 @@ export function analyzeJsxProps(
           stateReads: [],
           explanation:
             `Unstable ${typeDescriptions[prop.unstableVar.type]} '${prop.unstableVar.name}' is passed as prop '${prop.propName}' to memoized component '${prop.componentName}'. ` +
-            `This creates a new reference on every render, defeating the purpose of React.memo() and causing unnecessary re-renders. ` +
-            `Fix: wrap '${prop.unstableVar.name}' with ${prop.unstableVar.type === 'function' ? 'useCallback' : 'useMemo'}.`,
+            `This creates a new reference on every render, defeating the purpose of React.memo() and causing unnecessary re-renders.`,
+          suggestion: `Wrap '${prop.unstableVar.name}' with ${prop.unstableVar.type === 'function' ? 'useCallback' : 'useMemo'} to create a stable reference.`,
         })
       );
     }

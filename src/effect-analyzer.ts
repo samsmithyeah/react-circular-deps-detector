@@ -365,11 +365,10 @@ export function detectUseEffectWithoutDeps(
             stateReads: [],
             explanation: isIndirect
               ? `${hookName} has no dependency array, so it runs after every render. ` +
-                `It calls '${functionCallsInCallback[0]}()' which calls '${firstSetter}()', triggering re-renders. ` +
-                `Fix: add a dependency array (e.g., [] for run-once, or [dep1, dep2] for specific dependencies).`
+                `It calls '${functionCallsInCallback[0]}()' which calls '${firstSetter}()', triggering re-renders.`
               : `${hookName} has no dependency array, so it runs after every render. ` +
-                `It calls '${firstSetter}()' which triggers a re-render, causing an infinite loop. ` +
-                `Fix: add a dependency array (e.g., [] for run-once, or [dep1, dep2] for specific dependencies).`,
+                `It calls '${firstSetter}()' which triggers a re-render, causing an infinite loop.`,
+            suggestion: `Add a dependency array: useEffect(() => { ... }, []) for run-once, or [dep1, dep2] for specific dependencies.`,
           })
         );
       }

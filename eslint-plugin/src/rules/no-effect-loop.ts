@@ -57,9 +57,9 @@ export default createRule<[Options], MessageIds>({
     },
     messages: {
       effectLoop:
-        "useEffect modifies '{{state}}' via '{{setter}}()' while depending on it. This causes an infinite loop.",
+        "useEffect modifies '{{state}}' via '{{setter}}()' while depending on it. This causes an infinite loop. Fix: Use a functional update ({{setter}}(prev => ...)) and remove '{{state}}' from dependencies, or add a guard condition.",
       effectLoopLayout:
-        "useLayoutEffect modifies '{{state}}' via '{{setter}}()' while depending on it. This causes an infinite loop.",
+        "useLayoutEffect modifies '{{state}}' via '{{setter}}()' while depending on it. This causes an infinite loop. Fix: Use a functional update ({{setter}}(prev => ...)) and remove '{{state}}' from dependencies, or add a guard condition.",
     },
     schema: [
       {
