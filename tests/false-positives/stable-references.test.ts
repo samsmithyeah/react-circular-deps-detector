@@ -515,4 +515,247 @@ describe('Stable Reference False Positives', () => {
       expect(issues.length).toBeGreaterThan(0);
     });
   });
+
+  describe('Zustand store hooks via pattern matching (useXxxStore)', () => {
+    // These tests verify that Zustand store hooks matching the /^use\w+Store$/ pattern
+    // are correctly identified as stable when using presets
+
+    it('should NOT flag useAuthStore selector as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useEffect, useState } from 'react';
+        import { useAuthStore } from './store';
+
+        export function ProfileScreen() {
+          const [loading, setLoading] = useState(false);
+          // Zustand selector - returns stable reference
+          const user = useAuthStore((state) => state.user);
+          const setUser = useAuthStore((state) => state.setUser);
+
+          useEffect(() => {
+            if (!user) {
+              setLoading(true);
+              fetchUser().then((u) => {
+                setUser(u);
+                setLoading(false);
+              });
+            }
+          }, [user, setUser]);
+
+          return <div>{user?.name}</div>;
+        }
+
+        async function fetchUser() { return { name: 'Test' }; }
+      `);
+
+      // Pass Zustand preset config with pattern
+      const results = analyzeHooks([parsed], {
+        stableHooks: ['useStore', 'useShallow'],
+        stableHookPatterns: [/^use\w+Store$/],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // user and setUser from useAuthStore should be treated as stable
+      expect(issues).toHaveLength(0);
+    });
+
+    it('should NOT flag useLibraryStore selector as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useMemo } from 'react';
+        import { useLibraryStore } from './store';
+
+        export function ShareModal({ storyId }: { storyId: string }) {
+          // Zustand selector with .find() - the selector function is called by Zustand
+          // and the returned object reference is stable (memoized internally)
+          const story = useLibraryStore((state) => state.stories.find((s) => s.id === storyId));
+
+          const shareMessage = useMemo(() => {
+            if (!story) return "";
+            return \`Check out "\${story.title}"!\`;
+          }, [story]);
+
+          return <div>{shareMessage}</div>;
+        }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHooks: ['useStore'],
+        stableHookPatterns: [/^use\w+Store$/],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // story from useLibraryStore should be treated as stable
+      expect(issues).toHaveLength(0);
+    });
+
+    it('should NOT flag useWizardPrefillStore selector as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useEffect } from 'react';
+        import { useWizardPrefillStore } from './store';
+
+        export function StoryWizard() {
+          const prefillConfig = useWizardPrefillStore((state) => state.prefillConfig);
+          const clearPrefill = useWizardPrefillStore((state) => state.clearPrefill);
+
+          useEffect(() => {
+            if (!prefillConfig) return;
+            // Apply prefill config
+            console.log('Applying prefill:', prefillConfig);
+            clearPrefill();
+          }, [prefillConfig, clearPrefill]);
+
+          return <div>Wizard</div>;
+        }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHookPatterns: [/^use\w+Store$/],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // prefillConfig and clearPrefill from Zustand should be stable
+      expect(issues).toHaveLength(0);
+    });
+
+    it('should respect unstableHooks configuration', () => {
+      // Test that explicitly configured unstable hooks are flagged
+      const parsed = createTestFile(`
+        import React, { useEffect } from 'react';
+        import { useWindowSize } from 'react-use'; // Known unstable hook
+
+        export function Component() {
+          // useWindowSize returns { width, height } - new object each render
+          const size = useWindowSize();
+
+          useEffect(() => {
+            console.log('Size changed:', size);
+          }, [size]);
+
+          return <div>{size.width}x{size.height}</div>;
+        }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHookPatterns: [/^use\w+Store$/],
+        unstableHooks: ['useWindowSize'], // Explicitly marked as unstable
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // useWindowSize is explicitly marked as unstable, so size should be flagged
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues[0].problematicDependency).toBe('size');
+    });
+  });
+
+  describe('expo-router hooks via preset', () => {
+    // These tests verify that expo-router hooks are correctly identified as stable
+
+    it('should NOT flag useRouter as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useEffect } from 'react';
+        import { useRouter } from 'expo-router';
+
+        export function TabLayout() {
+          const router = useRouter();
+          const user = null; // Simulated auth state
+
+          useEffect(() => {
+            if (!user) {
+              router.replace('/(auth)/login');
+            }
+          }, [user, router]);
+
+          return <div>Tab Layout</div>;
+        }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHooks: ['useRouter', 'useNavigation', 'useLocalSearchParams'],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // router from useRouter should be stable (expo-router preset)
+      expect(issues).toHaveLength(0);
+    });
+
+    it('should NOT flag useLocalSearchParams as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useEffect, useState } from 'react';
+        import { useLocalSearchParams } from 'expo-router';
+
+        export function StoryScreen() {
+          const { storyId } = useLocalSearchParams();
+          const [story, setStory] = useState(null);
+
+          useEffect(() => {
+            if (storyId) {
+              fetchStory(storyId).then(setStory);
+            }
+          }, [storyId]);
+
+          return <div>{story?.title}</div>;
+        }
+
+        async function fetchStory(id: string) { return { title: 'Test' }; }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHooks: ['useLocalSearchParams', 'useGlobalSearchParams'],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // storyId from useLocalSearchParams destructuring should be stable
+      expect(issues).toHaveLength(0);
+    });
+
+    it('should NOT flag useSegments as unstable', () => {
+      const parsed = createTestFile(`
+        import React, { useEffect } from 'react';
+        import { useSegments, useRouter } from 'expo-router';
+
+        export function AuthLayout() {
+          const segments = useSegments();
+          const router = useRouter();
+          const isLoggedIn = false;
+
+          useEffect(() => {
+            const inAuthGroup = segments[0] === '(auth)';
+            if (!isLoggedIn && !inAuthGroup) {
+              router.replace('/(auth)/login');
+            }
+          }, [segments, router, isLoggedIn]);
+
+          return <div>Auth Layout</div>;
+        }
+      `);
+
+      const results = analyzeHooks([parsed], {
+        stableHooks: ['useSegments', 'useRouter', 'usePathname'],
+      });
+
+      const issues = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' || r.type === 'potential-issue'
+      );
+
+      // segments from useSegments should be stable
+      expect(issues).toHaveLength(0);
+    });
+  });
 });

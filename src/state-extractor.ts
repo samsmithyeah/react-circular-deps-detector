@@ -169,6 +169,10 @@ export interface StabilityCheckContext {
 export interface StabilityConfig {
   stableHooks?: string[];
   unstableHooks?: string[];
+  /** Regex patterns for hooks that return stable references (e.g., /^use\w+Store$/ for Zustand) */
+  stableHookPatterns?: RegExp[];
+  /** Regex patterns for hooks that return unstable references */
+  unstableHookPatterns?: RegExp[];
   customFunctions?: Record<
     string,
     {
@@ -179,17 +183,33 @@ export interface StabilityConfig {
 }
 
 /**
- * Check if a hook is configured as stable via options
+ * Check if a hook is configured as stable via options (includes pattern matching)
  */
 export function isConfiguredStableHook(hookName: string, config: StabilityConfig): boolean {
-  return config.stableHooks?.includes(hookName) ?? false;
+  // Check explicit list first
+  if (config.stableHooks?.includes(hookName)) {
+    return true;
+  }
+  // Check patterns
+  if (config.stableHookPatterns?.some((pattern) => pattern.test(hookName))) {
+    return true;
+  }
+  return false;
 }
 
 /**
- * Check if a hook is configured as unstable via options
+ * Check if a hook is configured as unstable via options (includes pattern matching)
  */
 export function isConfiguredUnstableHook(hookName: string, config: StabilityConfig): boolean {
-  return config.unstableHooks?.includes(hookName) ?? false;
+  // Check explicit list first
+  if (config.unstableHooks?.includes(hookName)) {
+    return true;
+  }
+  // Check patterns
+  if (config.unstableHookPatterns?.some((pattern) => pattern.test(hookName))) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -239,9 +259,16 @@ export function checkFunctionReturnStability(
 /**
  * Check if a CallExpression is a stable function call (returns primitive or stable value)
  *
- * When TypeScript strict mode is enabled and context is provided, this function
- * will use the TypeScript compiler API to determine actual return type stability
- * instead of relying purely on heuristics.
+ * Check order (IMPORTANT - presets must override TypeChecker):
+ * 1. Built-in React hooks (STABLE_REACT_HOOKS)
+ * 2. Known stable function calls (require, String, Number, etc.)
+ * 3. User config + library presets (stableHooks, unstableHooks, patterns)
+ * 4. TypeScript type checker (strict mode only, for unknown hooks)
+ * 5. use* heuristic (fallback for unrecognized hooks)
+ *
+ * This order ensures that library presets (Zustand, expo-router, etc.) take
+ * precedence over TypeScript type analysis, preventing false positives for
+ * libraries that return stable references but have object return types.
  */
 export function isStableFunctionCall(
   init: t.CallExpression,
@@ -251,7 +278,31 @@ export function isStableFunctionCall(
 ): boolean {
   const callee = init.callee;
 
-  // In strict mode with type checker, try to determine stability from actual types first
+  // 1. Built-in React hooks are guaranteed to return stable references
+  if (t.isIdentifier(callee) && STABLE_REACT_HOOKS.has(callee.name)) {
+    return true;
+  }
+
+  // 2. Known stable function calls (require, String, Number, etc.)
+  if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
+    return true;
+  }
+
+  // 3. Check user-configured stable/unstable hooks BEFORE TypeChecker
+  // This ensures library presets (Zustand, expo-router) override TypeScript analysis
+  if (t.isIdentifier(callee) && config) {
+    // If explicitly marked as unstable in config, return false
+    if (isConfiguredUnstableHook(callee.name, config)) {
+      return false;
+    }
+    // If explicitly marked as stable in config (or matches a pattern), return true
+    if (isConfiguredStableHook(callee.name, config)) {
+      return true;
+    }
+  }
+
+  // 4. In strict mode with type checker, use actual types for UNKNOWN hooks only
+  // This runs AFTER preset checks, so known-stable libraries won't be flagged
   if (typeChecker && context?.filePath && context?.line) {
     let functionName: string | null = null;
 
@@ -269,43 +320,20 @@ export function isStableFunctionCall(
         functionName
       );
       if (typeStability !== null) {
-        // Type checker gave us a definitive answer
+        // Type checker gave us a definitive answer for this unknown hook
         return typeStability;
       }
       // Fall through to heuristics if type checker couldn't determine
     }
   }
 
-  // Only specific React hooks are guaranteed to return stable references
-  if (t.isIdentifier(callee) && STABLE_REACT_HOOKS.has(callee.name)) {
-    return true;
-  }
-
-  // Known stable function calls
-  if (t.isIdentifier(callee) && STABLE_FUNCTION_CALLS.has(callee.name)) {
-    return true;
-  }
-
-  // Check for user-configured stable/unstable hooks first
-  if (t.isIdentifier(callee) && config) {
-    // If explicitly marked as unstable in config, return false
-    if (isConfiguredUnstableHook(callee.name, config)) {
-      return false;
-    }
-    // If explicitly marked as stable in config, return true
-    if (isConfiguredStableHook(callee.name, config)) {
-      return true;
-    }
-  }
-
-  // Custom hooks (use* prefix) are treated as stable by default
+  // 5. Custom hooks (use* prefix) are treated as stable by default (fallback heuristic)
   // Rationale: Most custom hooks in real apps either:
-  // 1. Return values from state management (Zustand, Redux, etc.) - stable references
-  // 2. Return primitives - stable by value
-  // 3. Memoize their return values internally
+  // - Return values from state management (Zustand, Redux, etc.) - stable references
+  // - Return primitives - stable by value
+  // - Memoize their return values internally
   // Treating them as unstable causes too many false positives in practice.
-  // If a custom hook genuinely returns new objects, users can still catch it
-  // through other patterns (e.g., the hook's internal implementation).
+  // If a custom hook genuinely returns new objects, users can configure it via unstableHooks.
   if (t.isIdentifier(callee) && callee.name.startsWith('use')) {
     return true;
   }

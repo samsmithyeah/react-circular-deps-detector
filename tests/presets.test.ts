@@ -393,6 +393,48 @@ describe('Preset Content Validation', () => {
     it('should mark getState as stable', () => {
       expect(preset.customFunctions?.getState).toEqual({ stable: true });
     });
+
+    it('should have pattern for user-defined store hooks', () => {
+      expect(preset.stableHookPatterns).toBeDefined();
+      expect(preset.stableHookPatterns!.length).toBeGreaterThan(0);
+
+      // Pattern should match common Zustand naming conventions
+      const pattern = preset.stableHookPatterns![0];
+      expect(pattern.test('useAuthStore')).toBe(true);
+      expect(pattern.test('useCartStore')).toBe(true);
+      expect(pattern.test('useUserStore')).toBe(true);
+      expect(pattern.test('useLibraryStore')).toBe(true);
+
+      // Should not match non-store hooks
+      expect(pattern.test('useState')).toBe(false);
+      expect(pattern.test('useAuth')).toBe(false);
+      expect(pattern.test('useStoreState')).toBe(false); // Doesn't end with Store
+    });
+  });
+
+  describe('Expo Router preset', () => {
+    const preset = LIBRARY_PRESETS.find((p) => p.name === 'Expo Router')!;
+
+    it('should exist and trigger on expo-router package', () => {
+      expect(preset).toBeDefined();
+      expect(preset.packages).toContain('expo-router');
+    });
+
+    it('should include navigation hooks', () => {
+      expect(preset.stableHooks).toContain('useRouter');
+      expect(preset.stableHooks).toContain('useNavigation');
+    });
+
+    it('should include route parameter hooks', () => {
+      expect(preset.stableHooks).toContain('useLocalSearchParams');
+      expect(preset.stableHooks).toContain('useGlobalSearchParams');
+      expect(preset.stableHooks).toContain('useSearchParams');
+    });
+
+    it('should include route info hooks', () => {
+      expect(preset.stableHooks).toContain('useSegments');
+      expect(preset.stableHooks).toContain('usePathname');
+    });
   });
 
   describe('react-use preset', () => {
@@ -402,6 +444,94 @@ describe('Preset Content Validation', () => {
       expect(preset.unstableHooks).toContain('useMouse');
       expect(preset.unstableHooks).toContain('useWindowSize');
       expect(preset.unstableHooks).toContain('useMeasure');
+    });
+  });
+});
+
+describe('Hook Pattern Matching', () => {
+  describe('mergePresets with patterns', () => {
+    it('should merge stableHookPatterns from multiple presets', () => {
+      const presets: LibraryPreset[] = [
+        {
+          name: 'Preset A',
+          packages: ['a'],
+          stableHooks: [],
+          unstableHooks: [],
+          stableHookPatterns: [/^useA\w+$/],
+        },
+        {
+          name: 'Preset B',
+          packages: ['b'],
+          stableHooks: [],
+          unstableHooks: [],
+          stableHookPatterns: [/^useB\w+$/],
+        },
+      ];
+
+      const merged = mergePresets(presets);
+
+      expect(merged.stableHookPatterns.length).toBe(2);
+      expect(merged.stableHookPatterns.some((p) => p.test('useATest'))).toBe(true);
+      expect(merged.stableHookPatterns.some((p) => p.test('useBTest'))).toBe(true);
+    });
+
+    it('should merge unstableHookPatterns', () => {
+      const presets: LibraryPreset[] = [
+        {
+          name: 'Preset A',
+          packages: ['a'],
+          stableHooks: [],
+          unstableHooks: [],
+          unstableHookPatterns: [/^useUnstable\w+$/],
+        },
+      ];
+
+      const merged = mergePresets(presets);
+
+      expect(merged.unstableHookPatterns.length).toBe(1);
+      expect(merged.unstableHookPatterns[0].test('useUnstableData')).toBe(true);
+    });
+
+    it('should handle presets without patterns', () => {
+      const presets: LibraryPreset[] = [
+        {
+          name: 'Preset A',
+          packages: ['a'],
+          stableHooks: ['useA'],
+          unstableHooks: [],
+          // No patterns
+        },
+      ];
+
+      const merged = mergePresets(presets);
+
+      expect(merged.stableHookPatterns).toEqual([]);
+      expect(merged.unstableHookPatterns).toEqual([]);
+      expect(merged.stableHooks).toContain('useA');
+    });
+  });
+
+  describe('Zustand pattern integration', () => {
+    it('should detect Zustand and include pattern in merged config', () => {
+      const deps = { zustand: '^4.0.0' };
+      const presets = detectApplicablePresets(deps);
+      const merged = mergePresets(presets);
+
+      // Should have the Zustand pattern
+      expect(merged.stableHookPatterns.length).toBeGreaterThan(0);
+      expect(merged.stableHookPatterns.some((p) => p.test('useAuthStore'))).toBe(true);
+    });
+  });
+
+  describe('Expo Router detection', () => {
+    it('should detect expo-router and include stable hooks', () => {
+      const deps = { 'expo-router': '^3.0.0' };
+      const presets = detectApplicablePresets(deps);
+      const merged = mergePresets(presets);
+
+      expect(merged.stableHooks).toContain('useRouter');
+      expect(merged.stableHooks).toContain('useLocalSearchParams');
+      expect(merged.stableHooks).toContain('useSegments');
     });
   });
 });

@@ -200,6 +200,8 @@ function analyzeFileIntelligently(
     const stabilityConfig: StabilityConfig = {
       stableHooks: options.stableHooks,
       unstableHooks: options.unstableHooks,
+      stableHookPatterns: options.stableHookPatterns,
+      unstableHookPatterns: options.unstableHookPatterns,
       customFunctions: options.customFunctions,
     };
     const unstableVars = extractUnstableVariables(ast, file.file, typeChecker, stabilityConfig);

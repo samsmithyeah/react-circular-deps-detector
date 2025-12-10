@@ -153,6 +153,8 @@ export async function detectCircularDependencies(
   const rawAnalysis = analyzeHooks(parsedFiles, {
     stableHooks: config.stableHooks,
     unstableHooks: config.unstableHooks,
+    stableHookPatterns: config.stableHookPatterns,
+    unstableHookPatterns: config.unstableHookPatterns,
     customFunctions: config.customFunctions,
     debug: options.debug,
     strictMode: options.strict || config.strictMode,
