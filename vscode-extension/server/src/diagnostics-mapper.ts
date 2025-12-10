@@ -153,9 +153,12 @@ function mapSeverity(
   }
 
   // High confidence, non-critical issues: map by severity
+  // Note: Even high severity non-critical issues should NOT be Error (red)
+  // because the "golden rule" says Error = guaranteed crash, and non-critical
+  // issues (performance, warnings) don't crash the browser
   switch (severity) {
     case 'high':
-      return DiagnosticSeverity.Error;
+      return DiagnosticSeverity.Warning;
     case 'medium':
       return DiagnosticSeverity.Warning;
     case 'low':
@@ -339,8 +342,11 @@ export function filterDiagnostics(
       | undefined;
 
     // Get original severity from data (not the mapped DiagnosticSeverity)
-    const issueSeverity = data?.issueSeverity || 'medium';
-    const confidence = data?.confidence || 'medium';
+    // Cross-file cycle diagnostics (RLD-300) don't have these fields in their data,
+    // but they are high severity/confidence issues that shouldn't be filtered out
+    const isCrossFileCycle = diagnostic.code === 'RLD-300';
+    const issueSeverity = data?.issueSeverity || (isCrossFileCycle ? 'high' : 'medium');
+    const confidence = data?.confidence || (isCrossFileCycle ? 'high' : 'medium');
 
     // Filter by both severity and confidence
     return (
