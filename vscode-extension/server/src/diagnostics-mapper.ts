@@ -12,6 +12,19 @@ import type { HookAnalysis, CrossFileCycle } from 'react-loop-detector';
 import { fileUriToPath } from './utils.js';
 
 /**
+ * Maximum number of lines to search when looking for the end of a multi-line
+ * declaration (e.g., function body, object literal). This is a safety limit
+ * to prevent searching the entire file for malformed code.
+ */
+const MAX_DECLARATION_SEARCH_LINES = 100;
+
+/**
+ * Maximum number of lines to search when looking for a complete hook call.
+ * Hook calls are typically shorter than function declarations.
+ */
+const MAX_HOOK_SEARCH_LINES = 50;
+
+/**
  * Information about a variable declaration found in the document
  */
 interface VariableDeclaration {
@@ -302,7 +315,11 @@ function findVariableDeclaration(
       let funcEndLine = lineIndex;
 
       if (!isBalanced(fullFunction)) {
-        for (let i = lineIndex + 1; i < lines.length && i < beforeLine + 50; i++) {
+        for (
+          let i = lineIndex + 1;
+          i < lines.length && i < beforeLine + MAX_DECLARATION_SEARCH_LINES;
+          i++
+        ) {
           fullFunction += '\n' + lines[i];
           funcEndLine = i;
           if (isBalanced(fullFunction)) break;
@@ -417,6 +434,96 @@ function isBalanced(text: string): boolean {
 }
 
 /**
+ * Find the position of the closing parenthesis that matches the opening paren
+ * at startIndex. Handles strings, template literals, and comments.
+ * Returns -1 if not found.
+ */
+function findClosingParen(text: string, startIndex: number): number {
+  let parenDepth = 0;
+  let inString = false;
+  let stringChar = '';
+  let inTemplate = false;
+  let templateDepth = 0;
+
+  for (let i = startIndex; i < text.length; i++) {
+    const char = text[i];
+    const prevChar = i > 0 ? text[i - 1] : '';
+    const nextChar = i < text.length - 1 ? text[i + 1] : '';
+
+    // Skip comments when not in a string or template
+    if (!inString && !inTemplate) {
+      if (char === '/' && nextChar === '/') {
+        const newlineIndex = text.indexOf('\n', i + 2);
+        if (newlineIndex === -1) {
+          break;
+        }
+        i = newlineIndex;
+        continue;
+      }
+      if (char === '/' && nextChar === '*') {
+        const commentEndIndex = text.indexOf('*/', i + 2);
+        if (commentEndIndex === -1) {
+          return -1;
+        }
+        i = commentEndIndex + 1;
+        continue;
+      }
+    }
+
+    // Handle string escapes
+    if (prevChar === '\\' && (inString || inTemplate)) continue;
+
+    // Handle string literals
+    if ((char === '"' || char === "'") && !inTemplate) {
+      if (inString && stringChar === char) {
+        inString = false;
+      } else if (!inString) {
+        inString = true;
+        stringChar = char;
+      }
+      continue;
+    }
+
+    // Handle template literals
+    if (char === '`') {
+      if (inTemplate && templateDepth === 0) {
+        inTemplate = false;
+      } else if (!inString) {
+        inTemplate = true;
+      }
+      continue;
+    }
+
+    if (inString) continue;
+
+    // Handle ${} in template literals
+    if (inTemplate && char === '$' && nextChar === '{') {
+      templateDepth++;
+      i++;
+      continue;
+    }
+
+    // Track parentheses
+    if (char === '(') {
+      parenDepth++;
+    } else if (char === ')') {
+      if (inTemplate && templateDepth > 0) {
+        // Inside template expression, ignore
+        continue;
+      }
+      parenDepth--;
+      if (parenDepth === 0) {
+        return i;
+      }
+    } else if (char === '}' && inTemplate && templateDepth > 0) {
+      templateDepth--;
+    }
+  }
+
+  return -1;
+}
+
+/**
  * Escape special regex characters in a string
  */
 function escapeRegExp(string: string): string {
@@ -444,7 +551,8 @@ function hasReactHookImport(documentText: string, hookName: string): boolean {
 
 /**
  * Find the position to insert a new hook import
- * Returns the position and whether to add to existing import or create new
+ * Returns the position and whether to add to existing import or create new.
+ * Handles both single-line and multi-line import statements.
  */
 function findImportInsertPosition(
   documentText: string,
@@ -456,65 +564,82 @@ function findImportInsertPosition(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Match: import { ... } from 'react'
-    const destructureMatch = line.match(
-      /^(\s*import\s*{\s*)([^}]*)(\s*}\s*from\s*['"]react['"];?\s*)$/
-    );
-    if (destructureMatch) {
-      const [, prefix, existingImports, suffix] = destructureMatch;
-      const imports = existingImports.split(',').map((s) => s.trim());
+    // Check if this line starts a React import with destructuring
+    if (/^\s*import\s*{/.test(line) || /^\s*import\s+\w+\s*,\s*{/.test(line)) {
+      // Collect lines until we have a complete import statement
+      let fullImport = line;
+      let endLine = i;
 
-      // Check if hook is already imported
-      if (imports.includes(hookName)) {
-        return null; // Already imported
+      // Handle multi-line imports
+      while (!fullImport.includes("from 'react'") && !fullImport.includes('from "react"')) {
+        endLine++;
+        if (endLine >= lines.length) break;
+        fullImport += '\n' + lines[endLine];
       }
 
-      // Add the hook to existing imports
-      const newImports = [...imports, hookName].join(', ');
-      return {
-        line: i,
-        edit: `${prefix}${newImports}${suffix}`,
-        replaceRange: {
-          start: Position.create(i, 0),
-          end: Position.create(i, line.length),
-        },
-      };
-    }
-
-    // Match: import React, { ... } from 'react'
-    const reactDestructureMatch = line.match(
-      /^(\s*import\s+React\s*,\s*{\s*)([^}]*)(\s*}\s*from\s*['"]react['"];?\s*)$/
-    );
-    if (reactDestructureMatch) {
-      const [, prefix, existingImports, suffix] = reactDestructureMatch;
-      const imports = existingImports.split(',').map((s) => s.trim());
-
-      if (imports.includes(hookName)) {
-        return null; // Already imported
+      // Check if this is a React import
+      if (!/'react'/.test(fullImport) && !/"react"/.test(fullImport)) {
+        continue;
       }
 
-      const newImports = [...imports, hookName].join(', ');
-      return {
-        line: i,
-        edit: `${prefix}${newImports}${suffix}`,
-        replaceRange: {
-          start: Position.create(i, 0),
-          end: Position.create(i, line.length),
-        },
-      };
+      // Extract the imports from the destructuring
+      const destructureMatch = fullImport.match(/import\s*{\s*([^}]*)\s*}\s*from\s*['"]react['"]/);
+      const reactDestructureMatch = fullImport.match(
+        /import\s+React\s*,\s*{\s*([^}]*)\s*}\s*from\s*['"]react['"]/
+      );
+
+      const match = reactDestructureMatch || destructureMatch;
+      if (match) {
+        const existingImports = match[1]
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+
+        // Check if hook is already imported
+        if (existingImports.includes(hookName)) {
+          return null; // Already imported
+        }
+
+        // Add the hook to existing imports
+        const newImports = [...existingImports, hookName].join(', ');
+
+        // Rebuild the import statement (single line for simplicity)
+        const newImport = reactDestructureMatch
+          ? `import React, { ${newImports} } from 'react';`
+          : `import { ${newImports} } from 'react';`;
+
+        return {
+          line: i,
+          edit: newImport,
+          replaceRange: {
+            start: Position.create(i, 0),
+            end: Position.create(endLine, lines[endLine].length),
+          },
+        };
+      }
     }
   }
 
   // If no destructuring import found, look for other React imports to add after
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    // Find complete React import (may span multiple lines)
+    let fullImport = lines[i];
+    let endLine = i;
 
-    // After any React import, add a new line
-    if (/import\s+.*from\s*['"]react['"]/.test(line)) {
-      return {
-        line: i + 1,
-        edit: `import { ${hookName} } from 'react';\n`,
-      };
+    // Collect lines if this looks like an import start
+    if (/^\s*import\s+/.test(lines[i])) {
+      while (!fullImport.includes(';') && endLine < lines.length - 1) {
+        endLine++;
+        fullImport += '\n' + lines[endLine];
+      }
+
+      // Check if this is a React import
+      if (/'react'/.test(fullImport) || /"react"/.test(fullImport)) {
+        return {
+          line: endLine + 1,
+          edit: `import { ${hookName} } from 'react';\n`,
+        };
+      }
     }
   }
 
@@ -843,7 +968,7 @@ function createAddDependencyArrayAction(
   let hookText = '';
 
   // Collect lines that might be part of the hook call
-  for (let i = lineIndex; i < Math.min(lineIndex + 20, lines.length); i++) {
+  for (let i = lineIndex; i < Math.min(lineIndex + MAX_HOOK_SEARCH_LINES, lines.length); i++) {
     hookText += lines[i] + '\n';
     if (isBalanced(hookText) && hookText.includes(')')) {
       break;
@@ -856,24 +981,11 @@ function createAddDependencyArrayAction(
     return null;
   }
 
-  // Find the closing parenthesis of the hook call
-  // We need to find where to insert the dependency array (before the final ))
+  // Find the closing parenthesis of the hook call using robust parsing
+  // that handles strings, comments, and template literals
   const hookStartIndex = hookText.indexOf(hookMatch[0]);
-  let parenDepth = 0;
-  let lastCloseParen = -1;
-
-  for (let i = hookStartIndex; i < hookText.length; i++) {
-    const char = hookText[i];
-    if (char === '(') {
-      parenDepth++;
-    } else if (char === ')') {
-      parenDepth--;
-      if (parenDepth === 0) {
-        lastCloseParen = i;
-        break;
-      }
-    }
-  }
+  const openParenIndex = hookStartIndex + hookMatch[0].indexOf('(');
+  const lastCloseParen = findClosingParen(hookText, openParenIndex);
 
   if (lastCloseParen === -1) {
     return null;

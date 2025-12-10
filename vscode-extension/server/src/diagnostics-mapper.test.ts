@@ -348,6 +348,37 @@ function Component() {
       expect(importEdit?.newText).toContain('React');
       expect(importEdit?.newText).toContain('useMemo');
     });
+
+    it('should handle multi-line React import', () => {
+      const documentText = `import {
+  useState,
+  useEffect
+} from 'react';
+
+function Component() {
+  const config = { id: 1 };
+  useEffect(() => {}, [config]);
+}`;
+
+      const diagnostic = createDiagnostic('RLD-400', 8, 'config');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useMemo'));
+      const edits = wrapAction?.edit?.changes?.['file:///test.tsx'];
+
+      // Should replace the multi-line import with single-line including useMemo
+      // Look for an edit that contains 'import' and 'useMemo' (the import edit)
+      const importEdit = edits?.find(
+        (e) => e.newText.includes('import') && e.newText.includes('useMemo')
+      );
+      expect(importEdit).toBeDefined();
+      expect(importEdit?.newText).toContain('useState');
+      expect(importEdit?.newText).toContain('useEffect');
+      expect(importEdit?.newText).toContain('useMemo');
+      // Should replace lines 0-3 (the multi-line import)
+      expect(importEdit?.range.start.line).toBe(0);
+      expect(importEdit?.range.end.line).toBe(3);
+    });
   });
 
   describe('Edge cases', () => {
@@ -450,6 +481,46 @@ function Component() {
 
       const wrapAction = actions.find((a) => a.title.includes('useCallback'));
       expect(wrapAction).toBeDefined();
+    });
+
+    it('should handle useEffect with strings containing parentheses', () => {
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  useEffect(() => {
+    console.log('A closing paren ) here');
+    console.log("Another (paren) here");
+  });
+}`;
+
+      const diagnostic = createDiagnostic('RLD-500', 3, undefined);
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const addDepsAction = actions.find((a) => a.title.includes('dependency array'));
+      expect(addDepsAction).toBeDefined();
+
+      // Verify the edit position is correct (should be at the closing paren of useEffect)
+      const edits = addDepsAction?.edit?.changes?.['file:///test.tsx'];
+      expect(edits).toBeDefined();
+      expect(edits?.length).toBe(1);
+      expect(edits?.[0].newText).toBe(', []');
+    });
+
+    it('should handle useEffect with template literals containing parens', () => {
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  useEffect(() => {
+    const msg = \`template with (parens)\`;
+    console.log(msg);
+  });
+}`;
+
+      const diagnostic = createDiagnostic('RLD-500', 3, undefined);
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const addDepsAction = actions.find((a) => a.title.includes('dependency array'));
+      expect(addDepsAction).toBeDefined();
     });
   });
 });
