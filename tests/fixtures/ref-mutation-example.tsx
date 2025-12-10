@@ -1,17 +1,18 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-// BAD: Ref mutation with state value in effect that depends on ref
-// This can cause stale closure issues
+// SAFE: Ref mutation with state value in effect (standard usePrevious/useLatest pattern)
+// Having ref in deps is unnecessary (refs are stable) but NOT harmful
 function RefMutationWithStateDep() {
   const [count, setCount] = useState(0);
   const countRef = useRef(count);
 
-  // This effect stores state in ref and depends on the ref
-  // Can cause stale closure issues
+  // This effect stores state in ref - this is the standard usePrevious/useLatest pattern
+  // Ref mutations inside effects are SAFE - they don't cause infinite loops
+  // Note: countRef in deps is unnecessary since refs are stable, but it's not a bug
   useEffect(() => {
-    countRef.current = count; // Mutates ref with state value
+    countRef.current = count; // Mutates ref with state value - SAFE in effects
     console.log('Count changed:', countRef.current);
-  }, [count, countRef]); // Depends on both count and ref
+  }, [count, countRef]); // countRef in deps is unnecessary but harmless
 
   return (
     <div>

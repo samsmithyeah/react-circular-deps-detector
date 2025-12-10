@@ -623,9 +623,9 @@ useEffect(() => {}, [config]);`,
       'State modification is conditional but the guard may not prevent all infinite loop scenarios.',
   },
   'RLD-600': {
-    title: 'Ref mutation with state value',
+    title: 'Render-phase ref mutation with state value',
     description:
-      'Mutating a ref with a state value can cause stale closure issues if the ref is read in callbacks.',
+      'Mutating a ref with a state value during render can cause issues. Note: Effect-phase ref mutations (useEffect/useLayoutEffect) are safe - this is the standard usePrevious/useLatest pattern.',
   },
 };
 

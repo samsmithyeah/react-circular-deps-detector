@@ -11,24 +11,24 @@ Detect infinite re-render risks and circular dependencies in React hooks directl
 
 ## Error Codes
 
-| Code    | Category    | Description                                        |
-| ------- | ----------- | -------------------------------------------------- |
-| RLD-100 | Critical    | setState called during render (synchronous loop)   |
-| RLD-101 | Critical    | Render phase setState via function call            |
-| RLD-200 | Critical    | useEffect unconditional setState loop              |
-| RLD-201 | Critical    | useEffect missing deps with setState               |
-| RLD-202 | Critical    | useLayoutEffect unconditional setState loop        |
-| RLD-300 | Warning     | Cross-file loop risk                               |
-| RLD-301 | Warning     | Cross-file conditional modification                |
-| RLD-400 | Performance | Unstable object reference in deps                  |
-| RLD-401 | Performance | Unstable array reference in deps                   |
-| RLD-402 | Performance | Unstable function reference in deps                |
-| RLD-403 | Performance | Unstable function call result in deps              |
-| RLD-410 | Warning     | Object spread guard risk                           |
-| RLD-420 | Warning     | useCallback/useMemo modifies dependency            |
-| RLD-500 | Warning     | useEffect missing dependency array                 |
-| RLD-501 | Warning     | Conditional modification needs review              |
-| RLD-600 | Warning     | Ref mutation with state value (stale closure risk) |
+| Code    | Category    | Description                                                              |
+| ------- | ----------- | ------------------------------------------------------------------------ |
+| RLD-100 | Critical    | setState called during render (synchronous loop)                         |
+| RLD-101 | Critical    | Render phase setState via function call                                  |
+| RLD-200 | Critical    | useEffect unconditional setState loop                                    |
+| RLD-201 | Critical    | useEffect missing deps with setState                                     |
+| RLD-202 | Critical    | useLayoutEffect unconditional setState loop                              |
+| RLD-300 | Warning     | Cross-file loop risk                                                     |
+| RLD-301 | Warning     | Cross-file conditional modification                                      |
+| RLD-400 | Performance | Unstable object reference in deps                                        |
+| RLD-401 | Performance | Unstable array reference in deps                                         |
+| RLD-402 | Performance | Unstable function reference in deps                                      |
+| RLD-403 | Performance | Unstable function call result in deps                                    |
+| RLD-410 | Warning     | Object spread guard risk                                                 |
+| RLD-420 | Warning     | useCallback/useMemo modifies dependency                                  |
+| RLD-500 | Warning     | useEffect missing dependency array                                       |
+| RLD-501 | Warning     | Conditional modification needs review                                    |
+| RLD-600 | Warning     | Ref mutation with state value during render phase (effect-phase is safe) |
 
 ## Configuration
 

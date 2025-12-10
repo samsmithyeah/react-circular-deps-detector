@@ -35,7 +35,7 @@ export type ErrorCode =
   | 'RLD-420' // useCallback/useMemo modifies dependency (no direct loop but review)
   | 'RLD-500' // useEffect missing dependency array
   | 'RLD-501' // Conditional modification needs review
-  | 'RLD-600'; // Ref mutation with state value (stale closure risk)
+  | 'RLD-600'; // Ref mutation with state value during render phase (effect-phase is safe)
 
 /**
  * Issue categories for filtering and display.

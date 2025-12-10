@@ -265,7 +265,7 @@ function generateSarifReport(results: DetectionResults): SarifReport {
     {
       id: 'RLD-600',
       name: 'Ref Mutation Risk',
-      shortDescription: { text: 'Ref mutation with state value (stale closure risk)' },
+      shortDescription: { text: 'Render-phase ref mutation with state value' },
       properties: { category: 'warning' },
     },
   ];
