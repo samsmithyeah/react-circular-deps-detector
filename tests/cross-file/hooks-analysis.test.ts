@@ -374,4 +374,143 @@ export function ComponentWithMissingImport() {
       expect(results).toBeDefined();
     });
   });
+
+  describe('Aliased Import Resolution', () => {
+    const aliasTestDir = path.join(__dirname, '..', 'fixtures', 'aliased-imports');
+
+    beforeAll(() => {
+      if (!fs.existsSync(aliasTestDir)) {
+        fs.mkdirSync(aliasTestDir, { recursive: true });
+      }
+
+      // Create component with aliased imports
+      const aliasedComponentContent = `import React, { useEffect, useState } from 'react';
+import { updateUserData as refreshData, processUserProfile as handleProfile } from './alias-utils';
+
+// Component using aliased import - should still detect infinite loop
+export function AliasedImportComponent() {
+  const [user, setUser] = useState({ id: 1, name: 'John' });
+
+  useEffect(() => {
+    if (user.id) {
+      // Calling the aliased function - should resolve to updateUserData
+      refreshData(user, setUser);
+    }
+  }, [user]); // Infinite loop through aliased cross-file call
+
+  return <div>User: {user.name}</div>;
+}
+
+// Component using another aliased import
+export function AnotherAliasedComponent() {
+  const [profile, setProfile] = useState({ id: 2, name: 'Jane' });
+
+  useEffect(() => {
+    if (profile.id) {
+      handleProfile(profile, setProfile);
+    }
+  }, [profile]); // Infinite loop through aliased cross-file call
+
+  return <div>Profile: {profile.name}</div>;
+}`;
+
+      // Create utility functions (same as the main test but for clarity)
+      const aliasUtilsContent = `// Utility functions that modify state through parameters
+export function updateUserData(user: any, setUser: (user: any) => void) {
+  setUser({ ...user, lastUpdated: new Date() });
+}
+
+export function processUserProfile(profile: any, setProfile: (profile: any) => void) {
+  setProfile({ ...profile, lastProcessed: new Date() });
+}`;
+
+      fs.writeFileSync(path.join(aliasTestDir, 'aliased-component.tsx'), aliasedComponentContent);
+      fs.writeFileSync(path.join(aliasTestDir, 'alias-utils.ts'), aliasUtilsContent);
+    });
+
+    afterAll(() => {
+      if (fs.existsSync(aliasTestDir)) {
+        fs.rmSync(aliasTestDir, { recursive: true, force: true });
+      }
+    });
+
+    it('should detect infinite loops when functions are imported with aliases', () => {
+      const componentFile = path.join(aliasTestDir, 'aliased-component.tsx');
+      const parsedFile = parseFile(componentFile);
+      const results = analyzeHooks([parsedFile]);
+
+      // Should detect the infinite loop despite the alias
+      const aliasedLoops = results.filter(
+        (r) => r.type === 'confirmed-infinite-loop' && r.file.includes('aliased-component.tsx')
+      );
+
+      expect(aliasedLoops.length).toBeGreaterThanOrEqual(1);
+
+      // Check for the user state loop
+      const userLoop = aliasedLoops.find(
+        (r) => r.problematicDependency === 'user' && r.setterFunction === 'setUser'
+      );
+
+      expect(userLoop).toBeDefined();
+      expect(userLoop!.severity).toBe('high');
+      expect(userLoop!.confidence).toBe('high');
+    });
+
+    it('should resolve multiple aliased imports correctly', () => {
+      const componentFile = path.join(aliasTestDir, 'aliased-component.tsx');
+      const parsedFile = parseFile(componentFile);
+      const results = analyzeHooks([parsedFile]);
+
+      const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
+
+      // Should detect both aliased import loops
+      const dependencies = confirmedLoops.map((r) => r.problematicDependency);
+      expect(dependencies).toContain('user');
+      expect(dependencies).toContain('profile');
+    });
+
+    it('should handle mix of aliased and non-aliased imports', () => {
+      const mixedComponentContent = `import React, { useEffect, useState } from 'react';
+import { updateUserData as refreshData, processUserProfile } from './alias-utils';
+
+export function MixedImportComponent() {
+  const [user, setUser] = useState({ id: 1, name: 'Mixed' });
+  const [profile, setProfile] = useState({ id: 2, name: 'Direct' });
+
+  // Aliased import call
+  useEffect(() => {
+    if (user.id) {
+      refreshData(user, setUser);
+    }
+  }, [user]);
+
+  // Non-aliased import call
+  useEffect(() => {
+    if (profile.id) {
+      processUserProfile(profile, setProfile);
+    }
+  }, [profile]);
+
+  return <div>User: {user.name}, Profile: {profile.name}</div>;
+}`;
+
+      const mixedFile = path.join(aliasTestDir, 'mixed-component.tsx');
+      fs.writeFileSync(mixedFile, mixedComponentContent);
+
+      const parsedFile = parseFile(mixedFile);
+      const results = analyzeHooks([parsedFile]);
+
+      const confirmedLoops = results.filter((r) => r.type === 'confirmed-infinite-loop');
+
+      // Should detect both loops
+      expect(confirmedLoops.length).toBeGreaterThanOrEqual(2);
+
+      const dependencies = confirmedLoops.map((r) => r.problematicDependency);
+      expect(dependencies).toContain('user');
+      expect(dependencies).toContain('profile');
+
+      // Clean up
+      fs.unlinkSync(mixedFile);
+    });
+  });
 });
