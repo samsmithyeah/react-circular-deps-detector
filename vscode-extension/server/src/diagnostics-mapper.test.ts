@@ -396,5 +396,60 @@ function Component() {
       const wrapAction = actions.find((a) => a.title.includes('useMemo'));
       expect(wrapAction).toBeUndefined();
     });
+
+    it('should handle objects with single-line comments', () => {
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  const config = {
+    id: 1, // This is a comment with { braces }
+    name: 'test'
+  };
+  useEffect(() => {}, [config]);
+}`;
+
+      const diagnostic = createDiagnostic('RLD-400', 8, 'config');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useMemo'));
+      expect(wrapAction).toBeDefined();
+    });
+
+    it('should handle objects with block comments', () => {
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  const config = {
+    /* This is a block comment
+       with { braces } and multiple lines */
+    id: 1
+  };
+  useEffect(() => {}, [config]);
+}`;
+
+      const diagnostic = createDiagnostic('RLD-400', 9, 'config');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useMemo'));
+      expect(wrapAction).toBeDefined();
+    });
+
+    it('should handle functions with comments in useCallback wrap', () => {
+      const documentText = `import { useEffect } from 'react';
+
+function Component() {
+  const handleClick = () => {
+    // Do something { with braces }
+    console.log('clicked');
+  };
+  useEffect(() => {}, [handleClick]);
+}`;
+
+      const diagnostic = createDiagnostic('RLD-402', 8, 'handleClick');
+      const actions = generateCodeActions(diagnostic, 'file:///test.tsx', documentText);
+
+      const wrapAction = actions.find((a) => a.title.includes('useCallback'));
+      expect(wrapAction).toBeDefined();
+    });
   });
 });

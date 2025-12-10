@@ -17,6 +17,8 @@ import { fileUriToPath } from './utils.js';
 interface VariableDeclaration {
   /** The line number (0-indexed) where the variable is declared */
   line: number;
+  /** The end line number (0-indexed) for multi-line declarations */
+  endLine: number;
   /** The column where the declaration starts */
   startColumn: number;
   /** The column where the declaration ends */
@@ -277,6 +279,7 @@ function findVariableDeclaration(
 
       return {
         line: lineIndex,
+        endLine,
         startColumn: indent.length,
         endColumn: lines[endLine].length,
         lineText: line,
@@ -296,20 +299,21 @@ function findVariableDeclaration(
     if (funcMatch) {
       // Find the full function body by tracking braces
       let fullFunction = line;
-      let endLine = lineIndex;
+      let funcEndLine = lineIndex;
 
       if (!isBalanced(fullFunction)) {
         for (let i = lineIndex + 1; i < lines.length && i < beforeLine + 50; i++) {
           fullFunction += '\n' + lines[i];
-          endLine = i;
+          funcEndLine = i;
           if (isBalanced(fullFunction)) break;
         }
       }
 
       return {
         line: lineIndex,
+        endLine: funcEndLine,
         startColumn: indent.length,
-        endColumn: lines[endLine].length,
+        endColumn: lines[funcEndLine].length,
         lineText: line,
         indent,
         declarationType: 'function',
@@ -323,7 +327,8 @@ function findVariableDeclaration(
 }
 
 /**
- * Check if parentheses, brackets, and braces are balanced in a string
+ * Check if parentheses, brackets, and braces are balanced in a string.
+ * Handles strings, template literals, and comments.
  */
 function isBalanced(text: string): boolean {
   const stack: string[] = [];
@@ -335,6 +340,29 @@ function isBalanced(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const char = text[i];
     const prevChar = i > 0 ? text[i - 1] : '';
+    const nextChar = i < text.length - 1 ? text[i + 1] : '';
+
+    // Skip comments when not in a string or template
+    if (!inString && !inTemplate) {
+      // Single-line comment: skip to end of line
+      if (char === '/' && nextChar === '/') {
+        const newlineIndex = text.indexOf('\n', i + 2);
+        if (newlineIndex === -1) {
+          break; // Comment goes to end of string
+        }
+        i = newlineIndex;
+        continue;
+      }
+      // Block comment: skip to closing */
+      if (char === '/' && nextChar === '*') {
+        const commentEndIndex = text.indexOf('*/', i + 2);
+        if (commentEndIndex === -1) {
+          return false; // Unclosed block comment
+        }
+        i = commentEndIndex + 1;
+        continue;
+      }
+    }
 
     // Handle string escapes
     if (prevChar === '\\' && (inString || inTemplate)) continue;
@@ -363,18 +391,15 @@ function isBalanced(text: string): boolean {
     if (inString) continue;
 
     // Handle ${} in template literals
-    if (inTemplate && char === '$' && text[i + 1] === '{') {
+    if (inTemplate && char === '$' && nextChar === '{') {
       templateDepth++;
+      i++; // Skip the { since we're tracking it with templateDepth
       continue;
     }
 
     // Track brackets
     if (char === '(' || char === '[' || char === '{') {
-      if (inTemplate && char === '{' && prevChar === '$') {
-        // This is ${ in a template, already counted
-      } else {
-        stack.push(char);
-      }
+      stack.push(char);
     } else if (char === ')' || char === ']' || char === '}') {
       if (inTemplate && char === '}' && templateDepth > 0) {
         templateDepth--;
@@ -388,7 +413,7 @@ function isBalanced(text: string): boolean {
     }
   }
 
-  return stack.length === 0 && !inString;
+  return stack.length === 0 && !inString && !inTemplate;
 }
 
 /**
@@ -660,33 +685,12 @@ function createWrapInUseCallbackAction(
     const [, params, body] = funcMatch;
     const wrappedCode = `const ${varName} = useCallback((${params}) => ${body}, []);`;
 
-    // Find the end of the function declaration
-    let endLine = declaration.line;
-    let braceCount = 0;
-    let foundStart = false;
-
-    for (let i = declaration.line; i < lines.length; i++) {
-      const line = lines[i];
-      for (const char of line) {
-        if (char === '{') {
-          foundStart = true;
-          braceCount++;
-        } else if (char === '}') {
-          braceCount--;
-          if (foundStart && braceCount === 0) {
-            endLine = i;
-            break;
-          }
-        }
-      }
-      if (foundStart && braceCount === 0) break;
-    }
-
+    // Use the endLine already calculated by findVariableDeclaration
     edits.push(
       TextEdit.replace(
         {
           start: Position.create(declaration.line, declaration.indent.length),
-          end: Position.create(endLine, lines[endLine].length),
+          end: Position.create(declaration.endLine, lines[declaration.endLine].length),
         },
         wrappedCode
       )
