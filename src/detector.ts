@@ -30,6 +30,8 @@ export interface DetectionResults {
   circularDependencies: CircularDependency[];
   crossFileCycles: CrossFileCycle[];
   intelligentHooksAnalysis: HookAnalysis[];
+  /** Information about how strict mode was resolved */
+  strictModeDetection: StrictModeDetection;
   summary: {
     filesAnalyzed: number;
     hooksAnalyzed: number;
@@ -52,7 +54,12 @@ export interface DetectorOptions {
   parallel?: boolean;
   /** Number of worker threads (default: number of CPU cores) */
   workers?: number;
-  /** Enable TypeScript strict mode for type-based stability detection */
+  /**
+   * Enable TypeScript strict mode for type-based stability detection.
+   * - true: Enable strict mode
+   * - false: Disable strict mode (use heuristics only)
+   * - undefined: Auto-detect based on tsconfig.json presence
+   */
   strict?: boolean;
   /** Custom path to tsconfig.json (for strict mode) */
   tsconfigPath?: string;
@@ -60,6 +67,90 @@ export interface DetectorOptions {
   since?: string;
   /** When using --since, also include files that import the changed files */
   includeDependents?: boolean;
+}
+
+/**
+ * Result of strict mode auto-detection
+ */
+export interface StrictModeDetection {
+  enabled: boolean;
+  reason: 'explicit' | 'auto-detected' | 'disabled' | 'no-tsconfig';
+  tsconfigPath?: string;
+}
+
+/**
+ * Find tsconfig.json in the project directory or parent directories
+ */
+function findTsConfig(targetPath: string): string | null {
+  let currentDir = path.resolve(targetPath);
+  const root = path.parse(currentDir).root;
+
+  while (currentDir !== root) {
+    const tsconfigPath = path.join(currentDir, 'tsconfig.json');
+    if (fs.existsSync(tsconfigPath)) {
+      return tsconfigPath;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+
+  return null;
+}
+
+/**
+ * Determine if strict mode should be enabled based on options and auto-detection
+ */
+function resolveStrictMode(
+  targetPath: string,
+  options: DetectorOptions,
+  config: RcdConfig
+): StrictModeDetection {
+  // 1. Explicit CLI flag takes precedence
+  if (options.strict === true) {
+    return {
+      enabled: true,
+      reason: 'explicit',
+      tsconfigPath: options.tsconfigPath,
+    };
+  }
+
+  if (options.strict === false) {
+    return {
+      enabled: false,
+      reason: 'disabled',
+    };
+  }
+
+  // 2. Config file setting takes precedence over auto-detection
+  if (config.strictMode === true) {
+    return {
+      enabled: true,
+      reason: 'explicit',
+      tsconfigPath: config.tsconfigPath,
+    };
+  }
+
+  if (config.strictMode === false) {
+    return {
+      enabled: false,
+      reason: 'disabled',
+    };
+  }
+
+  // 3. Auto-detect based on tsconfig.json presence
+  const detectedTsconfig = options.tsconfigPath || findTsConfig(targetPath);
+  if (detectedTsconfig) {
+    return {
+      enabled: true,
+      reason: 'auto-detected',
+      tsconfigPath: detectedTsconfig,
+    };
+  }
+
+  // 4. No tsconfig found, use heuristics
+  return {
+    enabled: false,
+    reason: 'no-tsconfig',
+  };
 }
 
 // Minimum file count to benefit from parallel processing
@@ -149,6 +240,9 @@ export async function detectCircularDependencies(
     ...detectAdvancedCrossFileCycles(parsedFiles),
   ];
 
+  // Resolve strict mode based on explicit flags, config, or auto-detection
+  const strictModeDetection = resolveStrictMode(targetPath, options, config);
+
   // Run intelligent hooks analysis (consolidated single analyzer)
   const rawAnalysis = analyzeHooks(parsedFiles, {
     stableHooks: config.stableHooks,
@@ -157,8 +251,8 @@ export async function detectCircularDependencies(
     unstableHookPatterns: config.unstableHookPatterns,
     customFunctions: config.customFunctions,
     debug: options.debug,
-    strictMode: options.strict || config.strictMode,
-    tsconfigPath: options.tsconfigPath || config.tsconfigPath,
+    strictMode: strictModeDetection.enabled,
+    tsconfigPath: strictModeDetection.tsconfigPath || config.tsconfigPath,
     projectRoot: targetPath,
   });
 
@@ -188,6 +282,7 @@ export async function detectCircularDependencies(
     circularDependencies: circularDeps,
     crossFileCycles: allCrossFileCycles,
     intelligentHooksAnalysis: intelligentHooksAnalysis,
+    strictModeDetection,
     summary: {
       filesAnalyzed: parsedFiles.length,
       hooksAnalyzed: totalHooks,

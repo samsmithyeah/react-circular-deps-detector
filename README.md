@@ -7,6 +7,8 @@ A static analysis tool to detect circular dependencies and infinite re-render ri
 - **Import Cycle Detection**: Finds circular imports between files
 - **React Hooks Analysis**: Detects infinite re-render risks in `useEffect`, `useCallback`, `useMemo`, `useLayoutEffect`, and `useImperativeHandle`
 - **Cross-File Cycle Detection**: Identifies import cycles spanning multiple files, including context and function-call based cycles
+- **TypeScript Strict Mode**: Auto-enabled for TypeScript projects - uses the TypeScript compiler for accurate type-based stability detection
+- **Library Presets**: Built-in presets for Zustand, React Query, React Redux, and more - automatically detects libraries from package.json
 - **Error Codes**: Stable error codes (RLD-XXX) for filtering and ignoring specific issue types
 - **Issue Categories**: Separate critical (crashes), warning (logic bugs), and performance issues
 - **Code Frames**: Shows actual code snippets in output for easy debugging
@@ -14,7 +16,6 @@ A static analysis tool to detect circular dependencies and infinite re-render ri
 - **Configurable**: Supports config files for custom hooks and ignore patterns
 - **Caching**: Optional AST caching to speed up repeated runs
 - **Zero Config**: Works out of the box with sensible defaults
-- **Library Presets**: Auto-detects popular libraries (React Query, Redux, Zustand, etc.) and applies their stable hook configurations
 
 ## Installation
 
@@ -60,6 +61,13 @@ rld ./src --confirmed-only
 
 # Enable caching for faster repeated runs
 rld ./src --cache
+
+# TypeScript strict mode (auto-enabled when tsconfig.json found)
+# Uses TypeScript compiler for more accurate type-based analysis
+rld ./src --strict
+
+# Disable strict mode (faster, uses heuristics only)
+rld ./src --no-strict
 
 # Disable colored output
 rld ./src --no-color

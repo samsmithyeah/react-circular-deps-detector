@@ -112,6 +112,7 @@ describe('Hooks Integration Tests', () => {
       await detectCircularDependencies(fixturesPath, {
         pattern: '*.{tsx,ts}',
         ignore: [],
+        strict: false, // Disable strict mode to test baseline memory (TypeChecker adds ~100MB)
       });
 
       const finalMemory = process.memoryUsage().heapUsed;

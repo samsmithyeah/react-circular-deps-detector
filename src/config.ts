@@ -111,7 +111,7 @@ export const DEFAULT_CONFIG: Required<RcdConfig> = {
   minConfidence: 'medium', // Default to medium to reduce false positives
   includePotentialIssues: true,
   customFunctions: {},
-  strictMode: false,
+  strictMode: undefined as unknown as boolean, // undefined = auto-detect based on tsconfig.json
   tsconfigPath: undefined as unknown as string,
   noPresets: false,
 };
