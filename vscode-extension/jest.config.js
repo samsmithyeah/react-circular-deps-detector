@@ -16,4 +16,8 @@ module.exports = {
       },
     ],
   },
+  // Map .js imports to .ts files for ESM compatibility
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+  },
 };
