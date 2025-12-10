@@ -65,6 +65,34 @@ export function analyzeCrossFileRelations(parsedFiles: ParsedFile[]): CrossFileA
   };
 }
 
+/**
+ * Build a mapping from local names (aliases) to original imported names.
+ * For example: `import { updateData as refreshData }` creates a mapping
+ * "refreshData" -> "updateData"
+ */
+function buildImportAliasMap(file: ParsedFile): Map<string, string> {
+  const aliasMap = new Map<string, string>();
+
+  for (const importInfo of file.imports) {
+    for (const [localName, originalName] of importInfo.importedNames) {
+      // Only add to the map if there's an actual alias (local name differs from original)
+      if (localName !== originalName) {
+        aliasMap.set(localName, originalName);
+      }
+    }
+  }
+
+  return aliasMap;
+}
+
+/**
+ * Resolve a function name to its original name using the alias map.
+ * If the name is an alias, return the original name; otherwise return as-is.
+ */
+function resolveAlias(name: string, aliasMap: Map<string, string>): string {
+  return aliasMap.get(name) || name;
+}
+
 function extractFileAnalysis(file: ParsedFile): {
   fileFunctions: FunctionDefinition[];
   fileCalls: FunctionCall[];
@@ -76,15 +104,18 @@ function extractFileAnalysis(file: ParsedFile): {
     // Use the cached AST from ParsedFile instead of re-parsing
     const ast = file.ast;
 
+    // Build alias map for resolving renamed imports
+    const aliasMap = buildImportAliasMap(file);
+
     // Extract state setters for this file
     const stateSetters = extractStateSetters(ast);
 
     // Find all function definitions
-    const functionDefs = findFunctionDefinitions(ast, file.file, stateSetters);
+    const functionDefs = findFunctionDefinitions(ast, file.file, stateSetters, aliasMap);
     fileFunctions.push(...functionDefs);
 
     // Find all function calls, especially those in hooks
-    const functionCalls = findFunctionCalls(ast, file.file, stateSetters);
+    const functionCalls = findFunctionCalls(ast, file.file, stateSetters, aliasMap);
     fileCalls.push(...functionCalls);
   } catch (error) {
     console.warn(`Could not parse ${file.file} for cross-file analysis:`, error);
@@ -147,7 +178,8 @@ function extractStateSetters(ast: t.Node): Map<string, string> {
 function findFunctionDefinitions(
   ast: t.Node,
   fileName: string,
-  stateSetters: Map<string, string>
+  stateSetters: Map<string, string>,
+  aliasMap: Map<string, string>
 ): FunctionDefinition[] {
   const functions: FunctionDefinition[] = [];
 
@@ -156,7 +188,7 @@ function findFunctionDefinitions(
 
     // Function declarations: function myFunc() {}
     if (node.type === 'FunctionDeclaration' && node.id && node.id.name) {
-      const func = analyzeFunctionNode(node, fileName, stateSetters, parent);
+      const func = analyzeFunctionNode(node, fileName, stateSetters, aliasMap, parent);
       if (func) functions.push(func);
     }
 
@@ -168,7 +200,14 @@ function findFunctionDefinitions(
       node.init &&
       (node.init.type === 'ArrowFunctionExpression' || node.init.type === 'FunctionExpression')
     ) {
-      const func = analyzeFunctionNode(node.init, fileName, stateSetters, parent, node.id.name);
+      const func = analyzeFunctionNode(
+        node.init,
+        fileName,
+        stateSetters,
+        aliasMap,
+        parent,
+        node.id.name
+      );
       if (func) functions.push(func);
     }
 
@@ -176,7 +215,14 @@ function findFunctionDefinitions(
     if (t.isObjectProperty(node) && t.isIdentifier(node.key) && t.isExpression(node.value)) {
       const value = node.value;
       if (t.isArrowFunctionExpression(value) || t.isFunctionExpression(value)) {
-        const func = analyzeFunctionNode(value, fileName, stateSetters, parent, node.key.name);
+        const func = analyzeFunctionNode(
+          value,
+          fileName,
+          stateSetters,
+          aliasMap,
+          parent,
+          node.key.name
+        );
         if (func) functions.push(func);
       }
     }
@@ -201,6 +247,7 @@ function analyzeFunctionNode(
   node: t.FunctionDeclaration | t.ArrowFunctionExpression | t.FunctionExpression,
   fileName: string,
   stateSetters: Map<string, string>,
+  aliasMap: Map<string, string>,
   parent?: t.Node | null,
   nameOverride?: string
 ): FunctionDefinition | null {
@@ -235,7 +282,7 @@ function analyzeFunctionNode(
   const isAsync = node.async || false;
 
   // Analyze what this function calls
-  const analysis = analyzeFunctionBody(node.body || node, stateSetters, setterLikeParams);
+  const analysis = analyzeFunctionBody(node.body || node, stateSetters, aliasMap, setterLikeParams);
 
   return {
     name,
@@ -252,6 +299,7 @@ function analyzeFunctionNode(
 function analyzeFunctionBody(
   body: t.BlockStatement | t.Expression | null | undefined,
   stateSetters: Map<string, string>,
+  aliasMap: Map<string, string>,
   parameters: string[] = []
 ): {
   callsStateSetters: string[];
@@ -273,7 +321,9 @@ function analyzeFunctionBody(
         if (setterNames.includes(funcName) || parameters.includes(funcName)) {
           callsStateSetters.push(funcName);
         } else {
-          callsFunctions.push(funcName);
+          // Resolve alias to original function name for cross-file lookup
+          const resolvedFuncName = resolveAlias(funcName, aliasMap);
+          callsFunctions.push(resolvedFuncName);
         }
       }
     }
@@ -301,7 +351,8 @@ function analyzeFunctionBody(
 function findFunctionCalls(
   ast: t.Node,
   fileName: string,
-  stateSetters: Map<string, string>
+  stateSetters: Map<string, string>,
+  aliasMap: Map<string, string>
 ): FunctionCall[] {
   const calls: FunctionCall[] = [];
   const setterNames = Array.from(stateSetters.keys());
@@ -335,8 +386,11 @@ function findFunctionCalls(
         const args = extractArgumentNames(node.arguments);
         const passesStateSetters = args.filter((arg) => setterNames.includes(arg));
 
+        // Resolve alias to original function name for cross-file lookup
+        const resolvedFunctionName = resolveAlias(calleeName, aliasMap);
+
         calls.push({
-          functionName: calleeName,
+          functionName: resolvedFunctionName,
           file: fileName,
           line: node.loc?.start.line || 0,
           arguments: args,
