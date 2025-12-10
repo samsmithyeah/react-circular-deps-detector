@@ -883,7 +883,6 @@ function createWrapInUseMemoAction(
   }
 
   const edits: TextEdit[] = [];
-  const lines = documentText.split('\n');
 
   // Calculate the range to replace (the initializer)
   const initText = declaration.initializerText;
@@ -901,36 +900,25 @@ function createWrapInUseMemoAction(
     wrappedCode = `useMemo(() => ${initText}, [])`;
   }
 
-  // Find the exact position of the initializer
-  // The declaration line contains: const varName = <initializer>;
-  const declLine = lines[declaration.line];
-  const equalsIndex = declLine.indexOf('=');
-
-  if (equalsIndex === -1) {
+  // Use the initializer position from declaration (already correctly calculated)
+  if (declaration.initializerStart === undefined) {
     return null;
   }
 
-  // Find where the initializer starts (after = and whitespace)
-  const afterEquals = declLine.substring(equalsIndex + 1);
-  const whitespaceMatch = afterEquals.match(/^(\s*)/);
-  const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+  const initStartCol = declaration.initializerStart;
 
-  // Calculate end position (handle multi-line)
-  let endLine = declaration.line;
-  let endCol = declLine.length;
+  // Calculate end position based on actual initializer text length
+  // This avoids including content after the initializer on the same line
+  const endLine = declaration.endLine;
+  let endCol: number;
 
-  // If multi-line, find the actual end
   if (initText.includes('\n')) {
-    const initLines = initText.split('\n');
-    endLine = declaration.line + initLines.length - 1;
-    endCol = lines[endLine].length;
-  }
-
-  // Remove trailing semicolon from end position if present
-  const lastLine = lines[endLine];
-  const semiMatch = lastLine.match(/;\s*$/);
-  if (semiMatch) {
-    endCol = lastLine.length - semiMatch[0].length;
+    // Multi-line: end column is the length of the last line of the initializer
+    const lastInitLine = initText.split('\n').pop() || '';
+    endCol = lastInitLine.length;
+  } else {
+    // Single-line: end column is start + initializer length
+    endCol = initStartCol + initText.length;
   }
 
   // Create the text edit for wrapping
@@ -1025,33 +1013,24 @@ function createWrapInUseCallbackAction(
     const initText = declaration.initializerText;
     const wrappedCode = `useCallback(${initText}, [])`;
 
-    // Find initializer position
-    const declLine = lines[declaration.line];
-    const equalsIndex = declLine.indexOf('=');
-
-    if (equalsIndex === -1) {
+    // Use the initializer position from declaration
+    if (declaration.initializerStart === undefined) {
       return null;
     }
 
-    const afterEquals = declLine.substring(equalsIndex + 1);
-    const whitespaceMatch = afterEquals.match(/^(\s*)/);
-    const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+    const initStartCol = declaration.initializerStart;
 
-    // Calculate end position
-    let endLine = declaration.line;
-    let endCol = declLine.length;
+    // Calculate end position based on actual initializer text length
+    const endLine = declaration.endLine;
+    let endCol: number;
 
     if (initText.includes('\n')) {
-      const initLines = initText.split('\n');
-      endLine = declaration.line + initLines.length - 1;
-      endCol = lines[endLine].length;
-    }
-
-    // Remove trailing semicolon
-    const lastLine = lines[endLine];
-    const semiMatch = lastLine.match(/;\s*$/);
-    if (semiMatch) {
-      endCol = lastLine.length - semiMatch[0].length;
+      // Multi-line: end column is the length of the last line of the initializer
+      const lastInitLine = initText.split('\n').pop() || '';
+      endCol = lastInitLine.length;
+    } else {
+      // Single-line: end column is start + initializer length
+      endCol = initStartCol + initText.length;
     }
 
     edits.push(
@@ -1081,32 +1060,24 @@ function createWrapInUseCallbackAction(
     const [, params, body] = funcMatch;
     const wrappedCode = `useCallback((${params}) => ${body}, [])`;
 
-    // Find initializer position
-    const declLine = lines[declaration.line];
-    const equalsIndex = declLine.indexOf('=');
-
-    if (equalsIndex === -1) {
+    // Use the initializer position from declaration
+    if (declaration.initializerStart === undefined) {
       return null;
     }
 
-    const afterEquals = declLine.substring(equalsIndex + 1);
-    const whitespaceMatch = afterEquals.match(/^(\s*)/);
-    const initStartCol = equalsIndex + 1 + (whitespaceMatch?.[1].length || 0);
+    const initStartCol = declaration.initializerStart;
 
-    // Calculate end position
-    let endLine = declaration.line;
-    let endCol = declLine.length;
+    // Calculate end position based on actual initializer text length
+    const endLine = declaration.endLine;
+    let endCol: number;
 
     if (initText.includes('\n')) {
-      const initLines = initText.split('\n');
-      endLine = declaration.line + initLines.length - 1;
-      endCol = lines[endLine].length;
-    }
-
-    const lastLine = lines[endLine];
-    const semiMatch = lastLine.match(/;\s*$/);
-    if (semiMatch) {
-      endCol = lastLine.length - semiMatch[0].length;
+      // Multi-line: end column is the length of the last line of the initializer
+      const lastInitLine = initText.split('\n').pop() || '';
+      endCol = lastInitLine.length;
+    } else {
+      // Single-line: end column is start + initializer length
+      endCol = initStartCol + initText.length;
     }
 
     edits.push(
