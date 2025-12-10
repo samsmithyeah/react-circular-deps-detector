@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import {
   isGitRepository,
   getGitRoot,
@@ -15,9 +15,9 @@ import {
  */
 function hasGitHistory(ref: string, cwd: string): boolean {
   try {
-    execSync(`git rev-parse --verify ${ref}`, {
+    execFileSync('git', ['rev-parse', '--verify', ref], {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: 'pipe',
     });
     return true;
   } catch {
