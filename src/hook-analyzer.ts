@@ -498,60 +498,15 @@ export function analyzeHookNode(
     // Only reads state, doesn't modify - don't return early, continue checking other deps
   }
 
-  // Check for ref mutations that store state values - potential stale closure issues
-  // This is a lower-priority warning as refs don't cause re-renders, but storing
-  // state in refs can lead to stale data if not used carefully
-  if (stateInteractions.refMutations.length > 0 && canCauseDirectLoop) {
-    for (const refMutation of stateInteractions.refMutations) {
-      if (refMutation.usesStateValue) {
-        // Check if this ref is also read in the dependencies
-        const refInDeps = dependencies.some(
-          (dep) => dep === refMutation.refName || dep.includes(refMutation.refName)
-        );
-
-        if (refInDeps) {
-          // Ref is both mutated with state value AND in dependencies - potential loop
-          const confidenceContext = {
-            usedTypeInference: true,
-            isConditional: false,
-            isStrictMode: isStrictModeEnabled(),
-          };
-          const confidenceExplanation = getConfidenceExplanation('low', confidenceContext);
-          return createAnalysis({
-            type: 'potential-issue',
-            errorCode: 'RLD-600',
-            category: 'warning',
-            severity: 'low',
-            confidence: 'low',
-            hookType: hookName,
-            line: refMutation.line,
-            file: filePath,
-            problematicDependency: refMutation.refName,
-            stateVariable: refMutation.assignedValue || 'state',
-            setterFunction: 'ref.current =',
-            actualStateModifications: [],
-            stateReads: stateInteractions.reads,
-            explanation: `${hookName} mutates '${refMutation.refName}.current' with state value while depending on the ref. This can cause stale closure issues.${confidenceExplanation}`,
-            suggestion: `Remove '${refMutation.refName}' from the dependency array (refs are stable), or use the state value directly instead of storing in a ref.`,
-            debugInfo: {
-              reason: `Ref '${refMutation.refName}' is mutated with state value '${refMutation.assignedValue}' and appears in dependencies`,
-              stateTracking: {
-                declaredStateVars: Array.from(stateInfo.keys()),
-                setterFunctions: Array.from(stateInfo.values()),
-                stableVariables: [],
-                unstableVariables: [],
-              },
-              dependencyAnalysis: {
-                rawDependencies: dependencies,
-                problematicDeps: [refMutation.refName],
-                safeDeps: dependencies.filter((d) => d !== refMutation.refName),
-              },
-            },
-          });
-        }
-      }
-    }
-  }
+  // NOTE: RLD-600 (Ref mutation with state value) was previously detected here.
+  // However, ref mutations inside effects are SAFE - this is the standard usePrevious/useLatest pattern.
+  // Refs are stable (same object identity across renders), so mutating ref.current in an effect:
+  //   useEffect(() => { ref.current = value; }, [value])
+  // does NOT cause infinite loops or stale closures - it's how you AVOID stale closures.
+  //
+  // The problematic pattern is render-phase ref mutations (mutating refs during render),
+  // which requires separate detection logic outside of hook analysis.
+  // See: docs/FEEDBACK_AND_ROADMAP.md "Refine RLD-600 Ref Mutation Logic"
 
   return null;
 }

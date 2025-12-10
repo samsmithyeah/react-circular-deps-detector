@@ -134,7 +134,7 @@ function getDescriptionForErrorCode(errorCode: string, hookType: string): string
     'RLD-420': 'Memoized hook modifies its dependency',
     'RLD-500': 'Missing dependency array',
     'RLD-501': 'Conditional modification needs review',
-    'RLD-600': 'Ref mutation with state value',
+    'RLD-600': 'Render-phase ref mutation with state value',
   };
 
   return descriptions[errorCode] || `${hookType} issue`;

@@ -331,7 +331,7 @@ Issues are identified by stable error codes that you can use for filtering:
 | `RLD-410` | Warning | Object spread guard risk |
 | `RLD-420` | Warning | useCallback/useMemo modifies dependency |
 | `RLD-501` | Warning | Conditional modification needs review |
-| `RLD-600` | Warning | Ref mutation with state value (stale closure risk) |
+| `RLD-600` | Warning | Ref mutation with state value during render phase (effect-phase is safe) |
 
 You can ignore specific error codes using comments:
 

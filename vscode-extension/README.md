@@ -28,7 +28,7 @@ Detect infinite re-render risks and circular dependencies in React hooks directl
 | RLD-420 | Warning     | useCallback/useMemo modifies dependency            |
 | RLD-500 | Warning     | useEffect missing dependency array                 |
 | RLD-501 | Warning     | Conditional modification needs review              |
-| RLD-600 | Warning     | Ref mutation with state value (stale closure risk) |
+| RLD-600 | Warning     | Ref mutation with state value during render phase (effect-phase is safe) |
 
 ## Configuration
 

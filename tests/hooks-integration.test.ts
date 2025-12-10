@@ -179,42 +179,42 @@ describe('Hooks Integration Tests', () => {
   });
 
   describe('useRef Mutation Detection', () => {
-    it('should detect ref mutations that store state values with ref dependencies', async () => {
+    it('should NOT flag ref mutations inside effects - this is the safe usePrevious/useLatest pattern', async () => {
+      // RLD-600 was previously triggered for effect-phase ref mutations with state values.
+      // This was overly aggressive - ref mutations inside effects are SAFE.
+      // The standard usePrevious/useLatest pattern mutates refs in effects.
+      // See: docs/FEEDBACK_AND_ROADMAP.md "Refine RLD-600 Ref Mutation Logic"
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'ref-mutation-example.tsx',
         ignore: [],
         config: {
-          minConfidence: 'low', // RLD-600 has low confidence, so we need to include it
+          minConfidence: 'low',
         },
       });
 
-      // Should find at least one ref mutation issue (RLD-600)
+      // Effect-phase ref mutations should NOT trigger RLD-600
       const refMutationIssues = results.intelligentHooksAnalysis.filter(
         (issue) => issue.errorCode === 'RLD-600'
       );
 
-      expect(refMutationIssues.length).toBeGreaterThanOrEqual(1);
-      expect(refMutationIssues[0].type).toBe('potential-issue');
-      expect(refMutationIssues[0].category).toBe('warning');
-      expect(refMutationIssues[0].explanation).toContain('ref');
+      // No RLD-600 issues should be reported for effect-phase ref mutations
+      expect(refMutationIssues.length).toBe(0);
     });
 
-    it('should not flag safe ref mutations without ref dependencies', async () => {
+    it('should analyze ref mutation examples without crashing', async () => {
       const results = await detectCircularDependencies(fixturesPath, {
         pattern: 'ref-mutation-example.tsx',
         ignore: [],
       });
 
-      // Safe patterns should not produce RLD-600 for the SafeRefMutation component
-      const allIssues = results.intelligentHooksAnalysis;
-
-      // Should have detected the file
+      // Should have analyzed the file successfully
       expect(results.summary.filesAnalyzed).toBe(1);
 
-      // Verify that the safe patterns don't have multiple RLD-600 issues
-      // (only the problematic one should be flagged)
-      const refMutationIssues = allIssues.filter((issue) => issue.errorCode === 'RLD-600');
-      expect(refMutationIssues.length).toBeLessThanOrEqual(1);
+      // No RLD-600 issues - all patterns in the fixture are effect-phase (safe)
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+      expect(refMutationIssues.length).toBe(0);
     });
   });
 });
