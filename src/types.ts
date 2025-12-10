@@ -5,6 +5,7 @@
  */
 
 import * as t from '@babel/types';
+import type { TypeChecker } from './type-checker';
 
 /**
  * Error codes for categorizing issues.
@@ -179,6 +180,12 @@ export interface AnalyzerOptions {
   tsconfigPath?: string;
   /** Project root directory (required for strict mode) */
   projectRoot?: string;
+  /**
+   * Optional pre-existing TypeChecker instance for strict mode.
+   * If provided, this will be used instead of creating a new one.
+   * This enables persistent type checking in the VS Code extension.
+   */
+  typeChecker?: TypeChecker | null;
 }
 
 /** Parameters for creating analysis results */

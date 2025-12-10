@@ -19,10 +19,13 @@ import {
   parseFile,
   analyzeHooks,
   createPathResolver,
+  getPersistentTypeChecker,
+  disposeAllPersistentTypeCheckers,
   type DetectionResults,
   type RcdConfig,
   type ParsedFile,
   type PathResolver,
+  type TypeChecker,
 } from 'react-loop-detector';
 import {
   mapAnalysisToDiagnostics,
@@ -70,6 +73,9 @@ const incrementalCache = new IncrementalCache();
 
 // Path resolver for resolving import paths
 let pathResolver: PathResolver | null = null;
+
+// Persistent type checker for strict mode (lazy-loaded, persists across analyses)
+let persistentTypeChecker: TypeChecker | null = null;
 
 // Initialize
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -124,6 +130,8 @@ connection.onInitialized(async () => {
 
 // Configuration change handler
 connection.onDidChangeConfiguration(async (change) => {
+  const previousStrictMode = globalSettings.strictMode;
+
   if (hasConfigurationCapability) {
     const settings = await connection.workspace.getConfiguration({
       section: 'reactLoopDetector',
@@ -139,12 +147,25 @@ connection.onDidChangeConfiguration(async (change) => {
     globalSettings = (change.settings?.reactLoopDetector as ServerSettings) || defaultSettings;
   }
 
+  // Dispose TypeChecker if strict mode was disabled
+  if (previousStrictMode && !globalSettings.strictMode) {
+    disposeTypeChecker();
+  }
+
   // Re-analyze with new settings
   if (globalSettings.enable) {
     scheduleFullAnalysis();
   } else {
     clearAllDiagnostics();
   }
+});
+
+// Server shutdown - clean up resources
+connection.onShutdown(() => {
+  connection.console.log('Server shutting down, disposing resources...');
+  disposeTypeChecker();
+  disposeAllPersistentTypeCheckers();
+  incrementalCache.clear();
 });
 
 // Track files that have changed and need re-analysis
@@ -313,6 +334,60 @@ async function loadRldConfig(): Promise<void> {
 }
 
 /**
+ * Get or create the persistent TypeChecker for strict mode analysis.
+ * The TypeChecker uses true lazy loading - it only initializes the TypeScript
+ * Language Service when a type query is actually made, not when constructed.
+ */
+function getTypeChecker(): TypeChecker | null {
+  if (!globalSettings.strictMode || !workspaceRoot) {
+    return null;
+  }
+
+  if (!persistentTypeChecker) {
+    persistentTypeChecker = getPersistentTypeChecker({
+      projectRoot: workspaceRoot,
+      tsconfigPath: rldConfig?.tsconfigPath,
+      cacheTypes: true,
+    });
+
+    // Validate config (but don't fully initialize yet - that's lazy)
+    const initialized = persistentTypeChecker.initialize();
+    if (!initialized) {
+      const error = persistentTypeChecker.getInitError();
+      connection.console.warn(
+        `TypeScript type checker validation failed: ${error?.message}. Falling back to heuristic-based detection.`
+      );
+      persistentTypeChecker = null;
+      return null;
+    }
+
+    connection.console.log('TypeScript type checker ready (will initialize on first type query)');
+  }
+
+  return persistentTypeChecker;
+}
+
+/**
+ * Update a file in the persistent TypeChecker (for incremental updates)
+ */
+function updateTypeCheckerFile(filePath: string, content: string): void {
+  if (persistentTypeChecker) {
+    persistentTypeChecker.updateFile(filePath, content);
+  }
+}
+
+/**
+ * Dispose the persistent TypeChecker (e.g., when strict mode is disabled)
+ */
+function disposeTypeChecker(): void {
+  if (persistentTypeChecker) {
+    persistentTypeChecker.dispose();
+    persistentTypeChecker = null;
+    connection.console.log('TypeScript type checker disposed');
+  }
+}
+
+/**
  * Tier 1: Fast single-file analysis
  * Provides immediate feedback for obvious issues within a single file.
  * Runs with minimal debounce (~100ms) for responsive typing experience.
@@ -354,13 +429,18 @@ async function runSingleFileAnalysis(uri: string, content: string): Promise<void
     // Update the cache
     incrementalCache.updateFile(filePath, content, parsed);
 
+    // Update the persistent TypeChecker with the new file content (for incremental updates)
+    updateTypeCheckerFile(filePath, content);
+
     // Run single-file analysis (no cross-file detection)
+    // Pass the persistent TypeChecker if strict mode is enabled
     const analysis = analyzeHooks([parsed], {
       stableHooks: rldConfig?.stableHooks,
       unstableHooks: rldConfig?.unstableHooks,
       customFunctions: rldConfig?.customFunctions,
       strictMode: globalSettings.strictMode,
       projectRoot: workspaceRoot || undefined,
+      typeChecker: getTypeChecker(), // Use persistent type checker
     });
 
     // Update analysis cache

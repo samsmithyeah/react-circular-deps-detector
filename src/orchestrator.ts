@@ -97,9 +97,26 @@ export function analyzeHooks(
   setCurrentOptions(options);
 
   // Initialize type checker if strict mode is enabled
-  if (options.strictMode && options.projectRoot) {
+  // Use provided typeChecker if available (for persistent VS Code extension instances)
+  const shouldCreateTypeChecker =
+    options.strictMode && options.projectRoot && options.typeChecker === undefined;
+  const hasProvidedTypeChecker =
+    options.strictMode && options.typeChecker !== undefined && options.typeChecker !== null;
+
+  if (hasProvidedTypeChecker) {
+    // Use the provided persistent type checker
+    typeChecker = options.typeChecker!;
+    if (
+      process.env.NODE_ENV !== 'test' &&
+      !process.argv.includes('--json') &&
+      !process.argv.includes('--sarif')
+    ) {
+      console.log('Using persistent TypeScript type checker for strict mode analysis.');
+    }
+  } else if (shouldCreateTypeChecker) {
+    // Create a new type checker
     typeChecker = createTypeChecker({
-      projectRoot: options.projectRoot,
+      projectRoot: options.projectRoot!,
       tsconfigPath: options.tsconfigPath,
       cacheTypes: true,
     });
@@ -148,9 +165,12 @@ export function analyzeHooks(
     }
   }
 
-  // Cleanup type checker
-  if (typeChecker) {
+  // Cleanup type checker ONLY if we created it (not if it was provided/persistent)
+  if (typeChecker && !hasProvidedTypeChecker) {
     typeChecker.dispose();
+    typeChecker = null;
+  } else {
+    // Clear the module-level reference but don't dispose (caller owns the instance)
     typeChecker = null;
   }
 

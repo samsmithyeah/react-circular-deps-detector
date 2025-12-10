@@ -1,4 +1,11 @@
-import { TypeChecker, createTypeChecker, isTypeScriptProject } from '../src/type-checker';
+import {
+  TypeChecker,
+  createTypeChecker,
+  isTypeScriptProject,
+  getPersistentTypeChecker,
+  disposePersistentTypeChecker,
+  disposeAllPersistentTypeCheckers,
+} from '../src/type-checker';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -121,6 +128,76 @@ describe('TypeChecker', () => {
 
       checker.dispose();
       fs.unlinkSync(customTsconfigPath);
+    });
+  });
+
+  describe('Lazy Loading Behavior', () => {
+    it('should not initialize language service during initialize()', () => {
+      const checker = createTypeChecker({
+        projectRoot: fixturesPath,
+      });
+
+      // After initialize(), the language service should NOT be created yet
+      const result = checker.initialize();
+      expect(result).toBe(true);
+      expect(checker.isInitialized()).toBe(false); // Language service not yet created
+      expect(checker.wasInitAttempted()).toBe(true); // But init was attempted
+
+      checker.dispose();
+    });
+
+    it('should initialize language service only on first type query', () => {
+      const testFilePath = path.join(fixturesPath, 'lazy-test.ts');
+      fs.writeFileSync(testFilePath, 'const x: string = "hello";');
+
+      try {
+        const checker = createTypeChecker({
+          projectRoot: fixturesPath,
+        });
+
+        checker.initialize();
+        expect(checker.isInitialized()).toBe(false);
+
+        // First type query should trigger language service creation
+        checker.getTypeAtLocation(testFilePath, 1, 'x');
+        expect(checker.isInitialized()).toBe(true);
+
+        checker.dispose();
+      } finally {
+        fs.unlinkSync(testFilePath);
+      }
+    });
+
+    it('should allow incremental file updates', () => {
+      const testFilePath = path.join(fixturesPath, 'incremental-test.ts');
+      fs.writeFileSync(testFilePath, 'const x: string = "hello";');
+
+      try {
+        const checker = createTypeChecker({
+          projectRoot: fixturesPath,
+          cacheTypes: true,
+        });
+
+        checker.initialize();
+
+        // Get initial type info
+        const info1 = checker.getTypeAtLocation(testFilePath, 1, 'x');
+        expect(info1?.typeString).toBe('string');
+
+        // Update file content (simulate editing)
+        const newContent = 'const x: number = 42;';
+        fs.writeFileSync(testFilePath, newContent);
+        checker.updateFile(testFilePath, newContent);
+
+        // Type cache for this file should be invalidated
+        // Next query should reflect new type
+        const info2 = checker.getTypeAtLocation(testFilePath, 1, 'x');
+        expect(info2?.typeString).toBe('number');
+
+        checker.dispose();
+      } finally {
+        fs.unlinkSync(testFilePath);
+      }
     });
   });
 
@@ -365,5 +442,81 @@ export { useData, useMutableData, getReadonlyData };
     expect(info).toBeNull();
 
     checker.dispose();
+  });
+});
+
+describe('Persistent TypeChecker', () => {
+  const fixturesPath = path.join(__dirname, 'fixtures', 'persistent-type-checker');
+  const tsconfigPath = path.join(fixturesPath, 'tsconfig.json');
+  const dummyFilePath = path.join(fixturesPath, 'dummy.ts');
+
+  beforeAll(() => {
+    if (!fs.existsSync(fixturesPath)) {
+      fs.mkdirSync(fixturesPath, { recursive: true });
+    }
+    fs.writeFileSync(dummyFilePath, 'export const dummy = 1;');
+    fs.writeFileSync(
+      tsconfigPath,
+      JSON.stringify({
+        compilerOptions: { target: 'ES2020', module: 'commonjs' },
+        include: ['*.ts'],
+      })
+    );
+  });
+
+  afterAll(() => {
+    disposeAllPersistentTypeCheckers();
+    const files = fs.readdirSync(fixturesPath);
+    for (const file of files) {
+      fs.unlinkSync(path.join(fixturesPath, file));
+    }
+    if (fs.existsSync(fixturesPath)) {
+      fs.rmdirSync(fixturesPath);
+    }
+  });
+
+  it('should return the same instance for the same project', () => {
+    const checker1 = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    const checker2 = getPersistentTypeChecker({ projectRoot: fixturesPath });
+
+    expect(checker1).toBe(checker2);
+  });
+
+  it('should persist type checker across multiple calls', () => {
+    const checker = getPersistentTypeChecker({ projectRoot: fixturesPath });
+
+    // Initialize and make a query to trigger language service creation
+    checker.initialize();
+    checker.getTypeAtLocation(dummyFilePath, 1, 'dummy');
+    expect(checker.isInitialized()).toBe(true);
+
+    // Get the persistent checker again - should be the same initialized instance
+    const checker2 = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    expect(checker2).toBe(checker);
+    expect(checker2.isInitialized()).toBe(true);
+  });
+
+  it('should dispose persistent type checker', () => {
+    const checker = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    checker.initialize();
+
+    disposePersistentTypeChecker(fixturesPath);
+
+    // Getting a new checker should create a fresh instance
+    const newChecker = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    expect(newChecker).not.toBe(checker);
+    expect(newChecker.isInitialized()).toBe(false);
+  });
+
+  it('should dispose all persistent type checkers', () => {
+    const checker = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    checker.initialize();
+
+    disposeAllPersistentTypeCheckers();
+
+    // Getting a new checker should create a fresh instance
+    const newChecker = getPersistentTypeChecker({ projectRoot: fixturesPath });
+    expect(newChecker).not.toBe(checker);
+    expect(newChecker.isInitialized()).toBe(false);
   });
 });

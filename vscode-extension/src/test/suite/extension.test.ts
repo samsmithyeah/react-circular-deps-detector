@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
-suite('Extension Test Suite', () => {
+suite('Extension Test Suite', function () {
+  // Language client spin-up and workspace analysis can take a few seconds in CI.
+  this.timeout(10000);
+
   vscode.window.showInformationMessage('Start all tests.');
 
   test('Extension should be present', () => {

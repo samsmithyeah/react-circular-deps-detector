@@ -122,6 +122,9 @@ export { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from 
 export {
   TypeChecker,
   createTypeChecker,
+  getPersistentTypeChecker,
+  disposePersistentTypeChecker,
+  disposeAllPersistentTypeCheckers,
   isTypeScriptProject,
   TypeInfo,
   TypeCheckerOptions,

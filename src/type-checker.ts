@@ -5,6 +5,12 @@
  * This is an optional "strict" mode that uses actual type information instead of
  * heuristics to determine variable stability.
  *
+ * Performance optimizations:
+ * - TRUE lazy loading: TypeScript Language Service only initialized on first type query
+ * - Incremental updates: File changes update the program incrementally, not from scratch
+ * - Per-file caching: Type information is cached per-file for fast repeated queries
+ * - Persistent instances: VS Code extension can persist the TypeChecker across analyses
+ *
  * Benefits over heuristic-based detection:
  * - Accurately detects readonly/immutable types
  * - Understands generic return types from hooks
@@ -49,15 +55,183 @@ export interface FunctionReturnInfo {
 }
 
 /**
- * TypeScript-based type checker for enhanced stability detection
+ * Language Service Host implementation for incremental type checking.
+ * This allows efficient updates when files change without rebuilding the entire program.
+ */
+class LazyLanguageServiceHost implements ts.LanguageServiceHost {
+  private fileVersions = new Map<string, number>();
+  private fileSnapshots = new Map<string, ts.IScriptSnapshot>();
+  private parsedConfig: ts.ParsedCommandLine | null = null;
+  private configPath: string | null = null;
+  private projectRoot: string;
+  private tsconfigPath?: string;
+
+  constructor(projectRoot: string, tsconfigPath?: string) {
+    this.projectRoot = projectRoot;
+    this.tsconfigPath = tsconfigPath;
+  }
+
+  /**
+   * Lazy load the tsconfig - only called when actually needed
+   */
+  private ensureConfig(): ts.ParsedCommandLine | null {
+    if (this.parsedConfig !== null) {
+      return this.parsedConfig;
+    }
+
+    this.configPath = this.findTsConfig();
+    if (!this.configPath) {
+      return null;
+    }
+
+    const configFile = ts.readConfigFile(this.configPath, ts.sys.readFile);
+    if (configFile.error) {
+      return null;
+    }
+
+    this.parsedConfig = ts.parseJsonConfigFileContent(
+      configFile.config,
+      ts.sys,
+      path.dirname(this.configPath)
+    );
+
+    return this.parsedConfig;
+  }
+
+  private findTsConfig(): string | null {
+    if (this.tsconfigPath) {
+      return fs.existsSync(this.tsconfigPath) ? this.tsconfigPath : null;
+    }
+
+    let dir = this.projectRoot;
+    const root = path.parse(dir).root;
+
+    while (dir !== root) {
+      const tsconfigPath = path.join(dir, 'tsconfig.json');
+      if (fs.existsSync(tsconfigPath)) {
+        return tsconfigPath;
+      }
+      dir = path.dirname(dir);
+    }
+
+    return null;
+  }
+
+  getCompilationSettings(): ts.CompilerOptions {
+    const config = this.ensureConfig();
+    return config?.options ?? {};
+  }
+
+  getScriptFileNames(): string[] {
+    const config = this.ensureConfig();
+    return config?.fileNames ?? [];
+  }
+
+  getScriptVersion(fileName: string): string {
+    return String(this.fileVersions.get(fileName) ?? 0);
+  }
+
+  getScriptSnapshot(fileName: string): ts.IScriptSnapshot | undefined {
+    // Check our cache first
+    const cached = this.fileSnapshots.get(fileName);
+    if (cached) {
+      return cached;
+    }
+
+    // Read from disk
+    if (!fs.existsSync(fileName)) {
+      return undefined;
+    }
+
+    const content = fs.readFileSync(fileName, 'utf-8');
+    const snapshot = ts.ScriptSnapshot.fromString(content);
+    this.fileSnapshots.set(fileName, snapshot);
+    return snapshot;
+  }
+
+  getCurrentDirectory(): string {
+    return this.projectRoot;
+  }
+
+  getDefaultLibFileName(options: ts.CompilerOptions): string {
+    return ts.getDefaultLibFilePath(options);
+  }
+
+  fileExists(fileName: string): boolean {
+    return ts.sys.fileExists(fileName);
+  }
+
+  readFile(fileName: string): string | undefined {
+    return ts.sys.readFile(fileName);
+  }
+
+  readDirectory(
+    path: string,
+    extensions?: readonly string[],
+    exclude?: readonly string[],
+    include?: readonly string[],
+    depth?: number
+  ): string[] {
+    return ts.sys.readDirectory(path, extensions, exclude, include, depth);
+  }
+
+  directoryExists(directoryName: string): boolean {
+    return ts.sys.directoryExists(directoryName);
+  }
+
+  getDirectories(directoryName: string): string[] {
+    return ts.sys.getDirectories(directoryName);
+  }
+
+  /**
+   * Update a file's content in the cache.
+   * This triggers incremental re-analysis on next type query.
+   */
+  updateFile(fileName: string, content: string): void {
+    const version = (this.fileVersions.get(fileName) ?? 0) + 1;
+    this.fileVersions.set(fileName, version);
+    this.fileSnapshots.set(fileName, ts.ScriptSnapshot.fromString(content));
+  }
+
+  /**
+   * Clear a file from the cache (e.g., when file is deleted)
+   */
+  removeFile(fileName: string): void {
+    this.fileVersions.delete(fileName);
+    this.fileSnapshots.delete(fileName);
+  }
+
+  /**
+   * Check if configuration was successfully loaded
+   */
+  hasValidConfig(): boolean {
+    return this.ensureConfig() !== null;
+  }
+
+  /**
+   * Get the config path (for error messages)
+   */
+  getConfigPath(): string | null {
+    this.ensureConfig();
+    return this.configPath;
+  }
+}
+
+/**
+ * TypeScript-based type checker for enhanced stability detection.
+ *
+ * Uses TRUE lazy loading: the TypeScript Language Service is only initialized
+ * when a type query is actually made, not when the TypeChecker is constructed.
+ * This dramatically improves startup time when strict mode is enabled but
+ * no type queries are needed (e.g., files that don't have complex patterns).
  */
 export class TypeChecker {
-  private program: ts.Program | null = null;
-  private checker: ts.TypeChecker | null = null;
+  private languageService: ts.LanguageService | null = null;
+  private languageServiceHost: LazyLanguageServiceHost | null = null;
   private options: TypeCheckerOptions;
   private typeCache: Map<string, TypeInfo> = new Map();
   private sourceFileCache: Map<string, ts.SourceFile> = new Map();
-  private initialized = false;
+  private initAttempted = false;
   private initError: Error | null = null;
 
   constructor(options: TypeCheckerOptions) {
@@ -65,54 +239,103 @@ export class TypeChecker {
   }
 
   /**
-   * Initialize the TypeScript program and type checker.
-   * This is done lazily to avoid overhead when not using strict mode.
+   * Ensure the Language Service is initialized.
+   * This is called lazily on first type query, not during construction.
+   * Returns true if initialization succeeded.
    */
-  initialize(): boolean {
-    if (this.initialized) {
-      return this.program !== null;
+  private ensureInitialized(): boolean {
+    if (this.languageService !== null) {
+      return true;
     }
 
-    this.initialized = true;
+    // If we have a valid host from initialize(), create the language service now
+    if (this.languageServiceHost !== null) {
+      try {
+        this.languageService = ts.createLanguageService(
+          this.languageServiceHost,
+          ts.createDocumentRegistry()
+        );
+        return true;
+      } catch (error) {
+        this.initError = error instanceof Error ? error : new Error(String(error));
+        return false;
+      }
+    }
+
+    // If init was already attempted and we don't have a host, it failed
+    if (this.initAttempted) {
+      return false;
+    }
+
+    // First time - do full initialization
+    this.initAttempted = true;
 
     try {
-      const configPath = this.findTsConfig();
-      if (!configPath) {
+      this.languageServiceHost = new LazyLanguageServiceHost(
+        this.options.projectRoot,
+        this.options.tsconfigPath
+      );
+
+      if (!this.languageServiceHost.hasValidConfig()) {
         this.initError = new Error(
           'No tsconfig.json found. TypeScript strict mode requires a TypeScript project.'
         );
+        this.languageServiceHost = null;
         return false;
       }
 
-      const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
-      if (configFile.error) {
-        this.initError = new Error(
-          `Error reading tsconfig.json: ${ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n')}`
-        );
-        return false;
-      }
-
-      const parsedConfig = ts.parseJsonConfigFileContent(
-        configFile.config,
-        ts.sys,
-        path.dirname(configPath)
+      // Create the Language Service (this is lightweight - actual parsing is deferred)
+      this.languageService = ts.createLanguageService(
+        this.languageServiceHost,
+        ts.createDocumentRegistry()
       );
 
-      if (parsedConfig.errors.length > 0) {
-        const errors = parsedConfig.errors
-          .map((e) => ts.flattenDiagnosticMessageText(e.messageText, '\n'))
-          .join('\n');
-        this.initError = new Error(`Error parsing tsconfig.json: ${errors}`);
+      return true;
+    } catch (error) {
+      this.initError = error instanceof Error ? error : new Error(String(error));
+      return false;
+    }
+  }
+
+  /**
+   * Initialize the TypeScript program and type checker.
+   * For backwards compatibility - validates config but defers Language Service creation.
+   * The Language Service is created lazily on first type query.
+   */
+  initialize(): boolean {
+    // If already fully initialized, return success
+    if (this.languageService !== null) {
+      return true;
+    }
+
+    // If we already have a host, config is valid - language service will be created on demand
+    if (this.languageServiceHost !== null) {
+      return true;
+    }
+
+    // If init was already attempted and failed (no host), return false
+    if (this.initAttempted) {
+      return false;
+    }
+
+    this.initAttempted = true;
+
+    try {
+      this.languageServiceHost = new LazyLanguageServiceHost(
+        this.options.projectRoot,
+        this.options.tsconfigPath
+      );
+
+      if (!this.languageServiceHost.hasValidConfig()) {
+        this.initError = new Error(
+          'No tsconfig.json found. TypeScript strict mode requires a TypeScript project.'
+        );
+        this.languageServiceHost = null;
         return false;
       }
 
-      // Create the program
-      this.program = ts.createProgram({
-        rootNames: parsedConfig.fileNames,
-        options: parsedConfig.options,
-      });
-
-      this.checker = this.program.getTypeChecker();
+      // DON'T create the language service yet - defer until first query
+      // This is the key optimization: we validate config but don't load the program
       return true;
     } catch (error) {
       this.initError = error instanceof Error ? error : new Error(String(error));
@@ -128,26 +351,75 @@ export class TypeChecker {
   }
 
   /**
-   * Find tsconfig.json in the project
+   * Update file content for incremental analysis.
+   * Call this when a file changes to enable efficient re-analysis.
    */
-  private findTsConfig(): string | null {
-    if (this.options.tsconfigPath) {
-      return fs.existsSync(this.options.tsconfigPath) ? this.options.tsconfigPath : null;
+  updateFile(filePath: string, content: string): void {
+    if (this.languageServiceHost) {
+      this.languageServiceHost.updateFile(filePath, content);
     }
 
-    // Search upward from project root
-    let dir = this.options.projectRoot;
-    const root = path.parse(dir).root;
+    // Invalidate caches for this file
+    this.sourceFileCache.delete(filePath);
 
-    while (dir !== root) {
-      const tsconfigPath = path.join(dir, 'tsconfig.json');
-      if (fs.existsSync(tsconfigPath)) {
-        return tsconfigPath;
+    // Clear type cache entries for this file
+    const keysToDelete: string[] = [];
+    for (const key of this.typeCache.keys()) {
+      if (key.startsWith(filePath + ':')) {
+        keysToDelete.push(key);
       }
-      dir = path.dirname(dir);
+    }
+    for (const key of keysToDelete) {
+      this.typeCache.delete(key);
+    }
+  }
+
+  /**
+   * Remove a file from the cache (e.g., when deleted)
+   */
+  removeFile(filePath: string): void {
+    if (this.languageServiceHost) {
+      this.languageServiceHost.removeFile(filePath);
+    }
+    this.sourceFileCache.delete(filePath);
+
+    // Clear type cache entries for this file
+    const keysToDelete: string[] = [];
+    for (const key of this.typeCache.keys()) {
+      if (key.startsWith(filePath + ':')) {
+        keysToDelete.push(key);
+      }
+    }
+    for (const key of keysToDelete) {
+      this.typeCache.delete(key);
+    }
+  }
+
+  /**
+   * Get the TypeScript type checker (for internal use).
+   * Lazily initializes the language service if needed.
+   */
+  private getChecker(): ts.TypeChecker | null {
+    if (!this.ensureInitialized()) {
+      return null;
     }
 
-    return null;
+    // After ensureInitialized() succeeds, languageService is guaranteed to be set
+    const program = this.languageService!.getProgram();
+    return program?.getTypeChecker() ?? null;
+  }
+
+  /**
+   * Get the current program (for internal use).
+   * Lazily initializes the language service if needed.
+   */
+  private getProgram(): ts.Program | null {
+    if (!this.ensureInitialized()) {
+      return null;
+    }
+
+    // After ensureInitialized() succeeds, languageService is guaranteed to be set
+    return this.languageService!.getProgram() ?? null;
   }
 
   /**
@@ -158,7 +430,8 @@ export class TypeChecker {
       return this.sourceFileCache.get(filePath);
     }
 
-    const sourceFile = this.program?.getSourceFile(filePath);
+    const program = this.getProgram();
+    const sourceFile = program?.getSourceFile(filePath);
     if (sourceFile) {
       this.sourceFileCache.set(filePath, sourceFile);
     }
@@ -169,7 +442,9 @@ export class TypeChecker {
    * Analyze a variable's type at a specific location
    */
   getTypeAtLocation(filePath: string, line: number, variableName: string): TypeInfo | null {
-    if (!this.checker || !this.program) {
+    const checker = this.getChecker();
+    const program = this.getProgram();
+    if (!checker || !program) {
       return null;
     }
 
@@ -189,8 +464,8 @@ export class TypeChecker {
       return null;
     }
 
-    const type = this.checker.getTypeAtLocation(node);
-    const typeInfo = this.analyzeType(type);
+    const type = checker.getTypeAtLocation(node);
+    const typeInfo = this.analyzeType(type, checker);
 
     if (this.options.cacheTypes) {
       this.typeCache.set(cacheKey, typeInfo);
@@ -207,7 +482,9 @@ export class TypeChecker {
     line: number,
     functionName: string
   ): FunctionReturnInfo | null {
-    if (!this.checker || !this.program) {
+    const checker = this.getChecker();
+    const program = this.getProgram();
+    if (!checker || !program) {
       return null;
     }
 
@@ -222,13 +499,13 @@ export class TypeChecker {
       return null;
     }
 
-    const signature = this.checker.getResolvedSignature(callNode);
+    const signature = checker.getResolvedSignature(callNode);
     if (!signature) {
       return null;
     }
 
-    const returnType = this.checker.getReturnTypeOfSignature(signature);
-    const typeInfo = this.analyzeType(returnType);
+    const returnType = checker.getReturnTypeOfSignature(signature);
+    const typeInfo = this.analyzeType(returnType, checker);
 
     return {
       returnType: typeInfo,
@@ -247,8 +524,8 @@ export class TypeChecker {
   /**
    * Analyze a TypeScript type and determine if it's stable
    */
-  private analyzeType(type: ts.Type): TypeInfo {
-    const typeString = this.checker!.typeToString(type);
+  private analyzeType(type: ts.Type, checker: ts.TypeChecker): TypeInfo {
+    const typeString = checker.typeToString(type);
 
     // Check for primitive types
     if (this.isPrimitiveType(type)) {
@@ -275,7 +552,7 @@ export class TypeChecker {
     }
 
     // Check for readonly array or tuple
-    if (this.isReadonlyArray(type)) {
+    if (this.isReadonlyArray(typeString)) {
       return {
         isStable: true,
         typeString,
@@ -287,7 +564,7 @@ export class TypeChecker {
     }
 
     // Check for Readonly<T> wrapper
-    if (this.hasReadonlyModifier(type)) {
+    if (this.hasReadonlyModifier(typeString)) {
       return {
         isStable: true,
         typeString,
@@ -327,7 +604,7 @@ export class TypeChecker {
     }
 
     // Check for React.RefObject or MutableRefObject
-    if (this.isReactRef(type)) {
+    if (this.isReactRef(typeString)) {
       return {
         isStable: true,
         typeString,
@@ -339,7 +616,7 @@ export class TypeChecker {
     }
 
     // Check for React.Dispatch (setState function)
-    if (this.isReactDispatch(type)) {
+    if (this.isReactDispatch(typeString)) {
       return {
         isStable: true,
         typeString,
@@ -394,10 +671,9 @@ export class TypeChecker {
   }
 
   /**
-   * Check if type is a readonly array
+   * Check if type is a readonly array (based on type string)
    */
-  private isReadonlyArray(type: ts.Type): boolean {
-    const typeString = this.checker!.typeToString(type);
+  private isReadonlyArray(typeString: string): boolean {
     return (
       typeString.startsWith('readonly ') ||
       typeString.startsWith('ReadonlyArray<') ||
@@ -406,10 +682,9 @@ export class TypeChecker {
   }
 
   /**
-   * Check if type has Readonly<T> wrapper
+   * Check if type has Readonly<T> wrapper (based on type string)
    */
-  private hasReadonlyModifier(type: ts.Type): boolean {
-    const typeString = this.checker!.typeToString(type);
+  private hasReadonlyModifier(typeString: string): boolean {
     return typeString.startsWith('Readonly<');
   }
 
@@ -439,10 +714,9 @@ export class TypeChecker {
   }
 
   /**
-   * Check if type is React.RefObject or React.MutableRefObject
+   * Check if type is React.RefObject or React.MutableRefObject (based on type string)
    */
-  private isReactRef(type: ts.Type): boolean {
-    const typeString = this.checker!.typeToString(type);
+  private isReactRef(typeString: string): boolean {
     return (
       typeString.includes('RefObject<') ||
       typeString.includes('MutableRefObject<') ||
@@ -452,10 +726,9 @@ export class TypeChecker {
   }
 
   /**
-   * Check if type is React.Dispatch (setState function type)
+   * Check if type is React.Dispatch (setState function type) (based on type string)
    */
-  private isReactDispatch(type: ts.Type): boolean {
-    const typeString = this.checker!.typeToString(type);
+  private isReactDispatch(typeString: string): boolean {
     return (
       typeString.includes('Dispatch<') ||
       typeString.includes('React.Dispatch<') ||
@@ -570,9 +843,29 @@ export class TypeChecker {
    */
   dispose(): void {
     this.clearCache();
-    this.program = null;
-    this.checker = null;
-    this.initialized = false;
+    if (this.languageService) {
+      this.languageService.dispose();
+      this.languageService = null;
+    }
+    this.languageServiceHost = null;
+    this.initAttempted = false;
+    this.initError = null;
+  }
+
+  /**
+   * Check if the TypeChecker has been initialized (language service created).
+   * Useful for performance monitoring.
+   */
+  isInitialized(): boolean {
+    return this.languageService !== null;
+  }
+
+  /**
+   * Check if initialization was attempted (even if it failed).
+   * Useful for debugging.
+   */
+  wasInitAttempted(): boolean {
+    return this.initAttempted;
   }
 }
 
@@ -581,6 +874,58 @@ export class TypeChecker {
  */
 export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
   return new TypeChecker(options);
+}
+
+/**
+ * Singleton map for persistent TypeChecker instances per project.
+ * Used by the VS Code extension to persist the TypeChecker across analyses.
+ */
+const persistentTypeCheckers = new Map<string, TypeChecker>();
+
+/**
+ * Get or create a persistent TypeChecker instance for a project.
+ * This is used by the VS Code extension to maintain the TypeChecker across
+ * file changes, enabling efficient incremental updates instead of recreating
+ * the entire TypeScript program for each analysis.
+ *
+ * @param options - TypeChecker options
+ * @returns A persistent TypeChecker instance for the project
+ */
+export function getPersistentTypeChecker(options: TypeCheckerOptions): TypeChecker {
+  const key = options.tsconfigPath ?? options.projectRoot;
+
+  let checker = persistentTypeCheckers.get(key);
+  if (!checker) {
+    checker = new TypeChecker(options);
+    persistentTypeCheckers.set(key, checker);
+  }
+
+  return checker;
+}
+
+/**
+ * Dispose and remove a persistent TypeChecker instance.
+ * Call this when a workspace is closed or the extension is deactivated.
+ *
+ * @param projectRoot - The project root to dispose the TypeChecker for
+ */
+export function disposePersistentTypeChecker(projectRoot: string): void {
+  const checker = persistentTypeCheckers.get(projectRoot);
+  if (checker) {
+    checker.dispose();
+    persistentTypeCheckers.delete(projectRoot);
+  }
+}
+
+/**
+ * Dispose all persistent TypeChecker instances.
+ * Call this when the extension is fully deactivated.
+ */
+export function disposeAllPersistentTypeCheckers(): void {
+  for (const checker of persistentTypeCheckers.values()) {
+    checker.dispose();
+  }
+  persistentTypeCheckers.clear();
 }
 
 /**
