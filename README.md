@@ -219,6 +219,55 @@ const functionB = useCallback(() => {
 }, []);
 ```
 
+## React Compiler (React 19) Compatibility
+
+React 19 introduces the React Compiler (formerly "React Forget"), which automatically memoizes components and hooks for better performance. You might wonder: "If the compiler auto-memoizes everything, do I still need this tool?"
+
+**Yes.** The React Compiler and React Loop Detector solve different problems:
+
+| Aspect | React Compiler | React Loop Detector |
+|--------|----------------|---------------------|
+| **Problem domain** | Performance optimization | Logic bug detection |
+| **What it does** | Auto-memoizes values to prevent unnecessary re-renders | Detects infinite loops caused by circular state dependencies |
+| **Example fix** | Caches `{ id: userId }` so the same object reference is reused | Warns that `useEffect(() => setX(x+1), [x])` loops forever |
+
+### Why the Compiler Can't Fix Logic Bugs
+
+The React Compiler optimizes *when* things re-render, not *what* they do. Consider:
+
+```typescript
+const [count, setCount] = useState(0);
+
+// ❌ INFINITE LOOP - React Compiler cannot fix this
+useEffect(() => {
+  setCount(count + 1);  // Always runs, always updates count
+}, [count]);            // count changes → effect runs → count changes → ...
+```
+
+The compiler might memoize the `count + 1` expression, but the fundamental problem remains: the effect modifies the state it depends on. This is a logic bug that causes an infinite loop regardless of memoization.
+
+### What Each Tool Catches
+
+**React Compiler prevents:**
+- Unnecessary re-renders from new object/array references
+- Performance issues from unmemoized callbacks
+- Wasted renders when props haven't semantically changed
+
+**React Loop Detector catches:**
+- Effects that modify their own dependencies (guaranteed loops)
+- Circular function dependencies in hooks
+- Cross-file state cycles through props and callbacks
+- Conditional modifications that may cause loops
+
+### Using Both Together
+
+For a robust React codebase, use both:
+
+1. **React Compiler** (React 19+): Handles performance automatically
+2. **React Loop Detector**: Catches logic bugs that cause infinite loops
+
+The tools are complementary—the compiler makes your app fast, this tool keeps it from crashing.
+
 ## Configuration
 
 Create a config file in your project root. Supported formats:
@@ -250,33 +299,45 @@ Create a config file in your project root. Supported formats:
 |--------|------|---------|-------------|
 | `stableHooks` | `string[]` | `[]` | Hooks that return stable references |
 | `unstableHooks` | `string[]` | `[]` | Hooks that return unstable references |
+| `stableHookPatterns` | `string[]` | `[]` | Regex patterns for stable hooks (e.g., `"^use\\w+Store$"` for Zustand) |
+| `unstableHookPatterns` | `string[]` | `[]` | Regex patterns for unstable hooks |
 | `customFunctions` | `object` | `{}` | Custom function stability info |
 | `ignore` | `string[]` | `[]` | Additional patterns to ignore |
 | `minSeverity` | `"high" \| "medium" \| "low"` | `"low"` | Minimum severity to report |
-| `minConfidence` | `"high" \| "medium" \| "low"` | `"low"` | Minimum confidence to report |
+| `minConfidence` | `"high" \| "medium" \| "low"` | `"medium"` | Minimum confidence to report |
 | `includePotentialIssues` | `boolean` | `true` | Include potential issues |
 | `noPresets` | `boolean` | `false` | Disable auto-detection of library presets |
+| `strictMode` | `boolean` | auto | Use TypeScript compiler for type-based analysis. Auto-enabled when `tsconfig.json` found |
+| `tsconfigPath` | `string` | - | Custom path to tsconfig.json (only used when strictMode is enabled) |
 
 ### Library Presets (Auto-Detection)
 
 React Loop Detector automatically detects popular React libraries from your `package.json` and applies their stable hook configurations. This means you get accurate analysis out of the box without manual configuration.
 
-**Supported Libraries:**
+**Supported Libraries (24+):**
 
-| Library | Package(s) | Example Stable Hooks |
-|---------|------------|---------------------|
-| **TanStack Query** | `@tanstack/react-query`, `react-query` | `useQuery`, `useMutation`, `useQueryClient` |
-| **SWR** | `swr` | `useSWR`, `useSWRMutation` |
-| **Apollo Client** | `@apollo/client` | `useQuery`, `useMutation`, `useApolloClient` |
-| **Redux** | `react-redux`, `@reduxjs/toolkit` | `useSelector`, `useDispatch`, `useStore` |
-| **Zustand** | `zustand` | `useStore`, `useShallow` |
-| **Jotai** | `jotai` | `useAtom`, `useAtomValue`, `useSetAtom` |
-| **React Hook Form** | `react-hook-form` | `useForm`, `useController`, `useWatch` |
-| **React Router** | `react-router-dom` | `useNavigate`, `useParams`, `useLocation` |
-| **react-i18next** | `react-i18next` | `useTranslation` |
-| **Framer Motion** | `framer-motion` | `useAnimation`, `useMotionValue` |
+| Category | Libraries |
+|----------|-----------|
+| **Data Fetching** | TanStack Query, SWR, Apollo Client, RTK Query, tRPC |
+| **State Management** | Redux, Zustand, Jotai, Recoil, Valtio, MobX, XState |
+| **Forms** | React Hook Form, Formik |
+| **Routing** | React Router, TanStack Router, Expo Router |
+| **i18n** | react-i18next, react-intl |
+| **Animation** | Framer Motion, React Spring |
+| **UI Components** | Chakra UI, Material UI, Radix UI |
+| **Utilities** | use-debounce, react-use, usehooks-ts |
 
-And many more! See the full list in `src/presets.ts`.
+**Example configurations applied:**
+
+| Library | Example Stable Hooks |
+|---------|---------------------|
+| **TanStack Query** | `useQuery`, `useMutation`, `useQueryClient` |
+| **Redux** | `useSelector`, `useDispatch`, `useStore` |
+| **Zustand** | `useStore`, `useShallow`, plus pattern `/^use\w+Store$/` |
+| **React Router** | `useNavigate`, `useParams`, `useLocation` |
+| **React Hook Form** | `useForm`, `useController`, `useWatch` |
+
+See the full list with all hooks in `src/presets.ts`.
 
 **Disabling Presets:**
 
@@ -309,10 +370,15 @@ rld ./src --no-presets
 | `--workers <count>` | Number of worker threads (default: CPU cores - 1) |
 | `--no-color` | Disable colored output |
 | `--min-severity <level>` | Minimum severity: `high`, `medium`, `low` |
-| `--min-confidence <level>` | Minimum confidence: `high`, `medium`, `low` |
+| `--min-confidence <level>` | Minimum confidence: `high`, `medium`, `low` (default: `medium`) |
 | `--confirmed-only` | Only report confirmed infinite loops |
 | `--cache` | Enable AST caching for faster runs. Disables parallel processing. |
 | `--no-presets` | Disable auto-detection of library presets from package.json |
+| `--strict` | Enable TypeScript strict mode (auto-enabled when tsconfig.json found) |
+| `--no-strict` | Disable strict mode (use heuristics only) |
+| `--tsconfig <path>` | Path to tsconfig.json (for strict mode) |
+| `--since <ref>` | Only analyze files changed since git ref (e.g., `main`, `HEAD~5`) |
+| `--include-dependents` | When using `--since`, also analyze files that import changed files |
 
 ### Commands
 
@@ -329,15 +395,23 @@ Issues are identified by stable error codes that you can use for filtering:
 | Code | Category | Description |
 |------|----------|-------------|
 | `RLD-100` | Critical | setState called during render (synchronous loop) |
+| `RLD-101` | Critical | setState via function call during render |
 | `RLD-200` | Critical | useEffect unconditional setState loop |
 | `RLD-201` | Critical | useEffect missing deps with setState |
 | `RLD-202` | Critical | useLayoutEffect unconditional setState loop |
 | `RLD-300` | Warning | Cross-file loop risk |
+| `RLD-301` | Warning | Cross-file conditional modification |
 | `RLD-400` | Performance | Unstable object reference in deps |
 | `RLD-401` | Performance | Unstable array reference in deps |
 | `RLD-402` | Performance | Unstable function reference in deps |
+| `RLD-403` | Performance | Unstable function call result in deps |
+| `RLD-404` | Performance | Unstable Context.Provider value |
+| `RLD-405` | Performance | Unstable prop to memoized component |
+| `RLD-406` | Performance | Unstable callback in useCallback deps |
+| `RLD-407` | Critical | useSyncExternalStore unstable getSnapshot (synchronous infinite loop) |
 | `RLD-410` | Warning | Object spread guard risk |
 | `RLD-420` | Warning | useCallback/useMemo modifies dependency |
+| `RLD-500` | Warning | Missing dependency array |
 | `RLD-501` | Warning | Conditional modification needs review |
 | `RLD-600` | Warning | Ref mutation with state value during render phase (effect-phase is safe) |
 
@@ -408,6 +482,8 @@ The following patterns are ignored by default:
 - `**/.next/**`
 - `**/.nuxt/**`
 - `**/.cache/**`
+
+Additionally, files larger than **1MB** are automatically skipped to avoid analyzing bundled or generated files.
 
 ## Exit Codes
 
