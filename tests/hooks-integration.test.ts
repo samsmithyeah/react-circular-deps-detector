@@ -217,5 +217,98 @@ describe('Hooks Integration Tests', () => {
       );
       expect(refMutationIssues.length).toBe(0);
     });
+
+    it('should flag render-phase ref mutations (RLD-600)', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'render-phase-ref-mutation.tsx',
+        ignore: [],
+        config: {
+          minConfidence: 'low',
+        },
+      });
+
+      // Should have analyzed the file successfully
+      expect(results.summary.filesAnalyzed).toBe(1);
+
+      // Should flag render-phase ref mutations
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+
+      // 4 problematic patterns in the fixture:
+      // 1. RenderPhaseRefWithState - countRef.current = count
+      // 2. RenderPhaseRefWithoutState - renderCountRef.current += 1
+      // 3. RenderPhaseRefWithDerived - countRef.current = items.length
+      // 4. ArrowComponentWithRefMutation - prevRef.current = value
+      expect(refMutationIssues.length).toBe(4);
+
+      // Verify each issue has the correct structure
+      for (const issue of refMutationIssues) {
+        expect(issue.errorCode).toBe('RLD-600');
+        expect(issue.category).toBe('warning');
+        expect(issue.confidence).toBe('high');
+        expect(issue.explanation).toContain('during render');
+        expect(issue.suggestion).toContain('useEffect');
+      }
+    });
+
+    it('should NOT flag safe ref mutation patterns', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'render-phase-ref-mutation.tsx',
+        ignore: [],
+        config: {
+          minConfidence: 'low',
+        },
+      });
+
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+
+      // Safe patterns should NOT be flagged:
+      // - SafeEffectRefMutation (ref mutation in useEffect)
+      // - SafeLayoutEffectRefMutation (ref mutation in useLayoutEffect)
+      // - SafeEventHandlerRefMutation (ref mutation in event handler)
+      // - SafeCallbackRefMutation (ref mutation in useCallback)
+      // - SafeNestedFunctionRefMutation (ref mutation in nested function)
+      // - SafeTimerRef (ref mutation in effect)
+      // - SafeRefRead (no mutation, just reading)
+
+      // Only 4 problematic patterns should be flagged (not the 7 safe ones)
+      expect(refMutationIssues.length).toBe(4);
+
+      // These are the SAFE patterns - their lines should NOT be flagged
+      // The safe patterns use refs inside effects/callbacks/handlers
+      // Check that issues are only in the PROBLEMATIC components (lines ~13, 27, 38, 52)
+      for (const issue of refMutationIssues) {
+        // All flagged issues should be in the problematic components section (lines before ~60)
+        expect(issue.line).toBeLessThan(60);
+      }
+    });
+
+    it('should assign higher severity to ref mutations with state values', async () => {
+      const results = await detectCircularDependencies(fixturesPath, {
+        pattern: 'render-phase-ref-mutation.tsx',
+        ignore: [],
+        config: {
+          minConfidence: 'low',
+        },
+      });
+
+      const refMutationIssues = results.intelligentHooksAnalysis.filter(
+        (issue) => issue.errorCode === 'RLD-600'
+      );
+
+      // RenderPhaseRefWithState (line ~13) and RenderPhaseRefWithDerived (line ~38)
+      // should have high severity (they use state values)
+      const highSeverityIssues = refMutationIssues.filter((i) => i.severity === 'high');
+      const mediumSeverityIssues = refMutationIssues.filter((i) => i.severity === 'medium');
+
+      // At least some should be high severity (using state)
+      expect(highSeverityIssues.length).toBeGreaterThan(0);
+
+      // At least one should be medium severity (not using state - RenderPhaseRefWithoutState)
+      expect(mediumSeverityIssues.length).toBeGreaterThan(0);
+    });
   });
 });

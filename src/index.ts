@@ -49,7 +49,11 @@ export {
   StabilityCheckContext,
 } from './state-extractor';
 
-export { detectSetStateDuringRender, isInsideSafeContext } from './render-phase-detector';
+export {
+  detectSetStateDuringRender,
+  detectRefMutationDuringRender,
+  isInsideSafeContext,
+} from './render-phase-detector';
 
 export {
   analyzeConditionalGuard,

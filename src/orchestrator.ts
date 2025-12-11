@@ -33,7 +33,7 @@ import {
   isConfiguredDeferredFunction as _isConfiguredDeferredFunction,
   StabilityConfig,
 } from './state-extractor';
-import { detectSetStateDuringRender } from './render-phase-detector';
+import { detectSetStateDuringRender, detectRefMutationDuringRender } from './render-phase-detector';
 import { detectUseEffectWithoutDeps, buildLocalFunctionSetterMap } from './effect-analyzer';
 import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
@@ -209,6 +209,10 @@ function analyzeFileIntelligently(
     // Check for setState during render (outside hooks/event handlers)
     const renderStateIssues = detectSetStateDuringRender(ast, stateInfo, file.file, file.content);
     results.push(...renderStateIssues);
+
+    // Check for ref.current mutations during render (outside hooks/event handlers)
+    const renderRefIssues = detectRefMutationDuringRender(ast, file.file, file.content);
+    results.push(...renderRefIssues);
 
     // Check for useEffect without dependency array
     const noDepsIssues = detectUseEffectWithoutDeps(ast, stateInfo, file.file, file.content);
