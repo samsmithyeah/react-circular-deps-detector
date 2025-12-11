@@ -26,7 +26,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { EFFECT_HOOKS, isStableFunctionCall } from '../utils';
+import { EFFECT_HOOKS, isStableFunctionCall, isNodeRldIgnored } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -212,6 +212,9 @@ export default createRule<[], MessageIds>({
 
         // Skip memoized variables - they're stable
         if (memoizedVariables.has(varName)) continue;
+
+        // Check for rld-ignore comments
+        if (isNodeRldIgnored(context.sourceCode, element)) continue;
 
         // Check all scopes for unstable variables
         for (let i = scopeStack.length - 1; i >= 0; i--) {

@@ -664,3 +664,170 @@ describe('no-unstable-jsx-props with checkCallbacks option', () => {
     ],
   });
 });
+
+// ============================================================================
+// rld-ignore comment support tests
+// ============================================================================
+
+describe('rld-ignore comments - no-effect-loop', () => {
+  ruleTester.run('no-effect-loop', noEffectLoop, {
+    valid: [
+      // Inline rld-ignore suppresses the error
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {
+            setCount(count + 1); // rld-ignore
+          }, [count]);
+        }
+      `,
+      // rld-ignore-next-line suppresses the error
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {
+            // rld-ignore-next-line
+            setCount(count + 1);
+          }, [count]);
+        }
+      `,
+      // Block comment rld-ignore
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          useEffect(() => {
+            setCount(count + 1); /* rld-ignore */
+          }, [count]);
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-unstable-deps', () => {
+  ruleTester.run('no-unstable-deps', noUnstableDeps, {
+    valid: [
+      // Inline rld-ignore on unstable object
+      `
+        function Component() {
+          useEffect(() => {
+            console.log('effect');
+          }, [{ key: 'value' }]); // rld-ignore
+        }
+      `,
+      // rld-ignore-next-line on unstable array
+      `
+        function Component() {
+          useEffect(() => {
+            console.log('effect');
+          }, [
+            // rld-ignore-next-line
+            [1, 2, 3]
+          ]);
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-unstable-variable-deps', () => {
+  ruleTester.run('no-unstable-variable-deps', noUnstableVariableDeps, {
+    valid: [
+      // rld-ignore on unstable object variable in deps
+      `
+        function Component() {
+          const config = { key: 'value' };
+          useEffect(() => {
+            console.log(config);
+          }, [config]); // rld-ignore
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-missing-deps-array', () => {
+  ruleTester.run('no-missing-deps-array', noMissingDepsArray, {
+    valid: [
+      // rld-ignore on useEffect without deps array
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          // rld-ignore-next-line
+          useEffect(() => {
+            setCount(count + 1);
+          });
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-render-phase-setstate', () => {
+  ruleTester.run('no-render-phase-setstate', noRenderPhaseSetState, {
+    valid: [
+      // rld-ignore on render-phase setState
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          setCount(count + 1); // rld-ignore
+          return <div>{count}</div>;
+        }
+      `,
+      // rld-ignore-next-line
+      `
+        function Component() {
+          const [count, setCount] = useState(0);
+          // rld-ignore-next-line
+          setCount(count + 1);
+          return <div>{count}</div>;
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-unstable-context-value', () => {
+  ruleTester.run('no-unstable-context-value', noUnstableContextValue, {
+    valid: [
+      // rld-ignore on inline object in Provider
+      `
+        function App() {
+          const [user, setUser] = useState(null);
+          return (
+            <UserContext.Provider value={{ user, setUser } /* rld-ignore */}>
+              <Child />
+            </UserContext.Provider>
+          );
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
+
+describe('rld-ignore comments - no-unstable-jsx-props', () => {
+  ruleTester.run('no-unstable-jsx-props', noUnstableJsxProps, {
+    valid: [
+      // rld-ignore on inline object prop
+      `
+        function Parent() {
+          return <Child config={{ page: 1 } /* rld-ignore */} />;
+        }
+      `,
+      // rld-ignore on variable prop
+      `
+        function Parent() {
+          const config = { page: 1 };
+          return <Child config={config /* rld-ignore */} />;
+        }
+      `,
+    ],
+    invalid: [],
+  });
+});
