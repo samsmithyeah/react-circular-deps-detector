@@ -306,10 +306,7 @@ export function findSetterCallsInBody(
  * @param node - The AST node to check
  * @returns true if the node should be ignored
  */
-export function isNodeRldIgnored(
-  sourceCode: TSESLint.SourceCode,
-  node: TSESTree.Node
-): boolean {
+export function isNodeRldIgnored(sourceCode: TSESLint.SourceCode, node: TSESTree.Node): boolean {
   const nodeLine = node.loc.start.line;
   const lines = sourceCode.getLines();
 
