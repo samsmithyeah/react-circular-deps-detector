@@ -5,7 +5,7 @@
  */
 
 import * as t from '@babel/types';
-import type { TypeChecker } from './type-checker';
+import type { TypeChecker, TypeCheckerPool } from './type-checker';
 
 /**
  * Error codes for categorizing issues.
@@ -190,6 +190,13 @@ export interface AnalyzerOptions {
    * This enables persistent type checking in the VS Code extension.
    */
   typeChecker?: TypeChecker | null;
+  /**
+   * Optional pre-existing TypeCheckerPool instance for monorepo strict mode.
+   * If provided, this will be used instead of a single TypeChecker.
+   * The pool manages multiple TypeChecker instances (one per tsconfig).
+   * Takes precedence over typeChecker if both are provided.
+   */
+  typeCheckerPool?: TypeCheckerPool | null;
 }
 
 /** Parameters for creating analysis results */

@@ -126,14 +126,34 @@ export { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from 
 // Type checker (for strict mode)
 export {
   TypeChecker,
+  TypeCheckerPool,
   createTypeChecker,
   getPersistentTypeChecker,
+  getPersistentTypeCheckerPool,
   disposePersistentTypeChecker,
+  disposePersistentTypeCheckerPool,
   disposeAllPersistentTypeCheckers,
+  disposeAllPersistentTypeCheckerPools,
   isTypeScriptProject,
   TypeInfo,
   TypeCheckerOptions,
 } from './type-checker';
 
+// Tsconfig manager (for monorepo support)
+export {
+  TsconfigManager,
+  TsconfigInfo,
+  WorkspacePackage,
+  MonorepoInfo,
+  createTsconfigManager,
+} from './tsconfig-manager';
+
 // Path resolver
-export { createPathResolver, PathResolver, PathResolverOptions } from './path-resolver';
+export {
+  createPathResolver,
+  createMultiProjectPathResolver,
+  PathResolver,
+  PathResolverOptions,
+  MultiProjectPathResolver,
+  MultiProjectPathResolverOptions,
+} from './path-resolver';

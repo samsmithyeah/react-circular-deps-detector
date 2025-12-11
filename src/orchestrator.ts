@@ -18,7 +18,7 @@ import * as path from 'path';
 import { ParsedFile, parseFile } from './parser';
 import { analyzeCrossFileRelations, CrossFileAnalysis } from './cross-file-analyzer';
 import { createPathResolver } from './path-resolver';
-import { TypeChecker, createTypeChecker } from './type-checker';
+import { TypeChecker, TypeCheckerPool, createTypeChecker } from './type-checker';
 
 // Import types
 import { HookAnalysis, AnalyzerOptions } from './types';
@@ -39,15 +39,22 @@ import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
 import { analyzeJsxProps } from './jsx-prop-analyzer';
 import { detectUnstableSyncExternalStore } from './sync-external-store-detector';
-import { setCurrentOptions } from './utils';
+import { setCurrentOptions, shouldLogToConsole } from './utils';
 
 // Re-export types for backward compatibility
 export type { HookAnalysis, AnalyzerOptions, ErrorCode, IssueCategory, DebugInfo } from './types';
 
 /**
  * Module-level type checker instance (only created when strict mode is enabled).
+ * For single-project setups, this holds a single TypeChecker.
  */
 let typeChecker: TypeChecker | null = null;
+
+/**
+ * Module-level type checker pool for monorepo setups.
+ * When set, typeChecker should be null - the pool manages multiple TypeChecker instances.
+ */
+let typeCheckerPool: TypeCheckerPool | null = null;
 
 /**
  * Module-level options for the stability config functions
@@ -97,60 +104,65 @@ export function analyzeHooks(
   setCurrentOptions(options);
 
   // Initialize type checker if strict mode is enabled
-  // Use provided typeChecker if available (for persistent VS Code extension instances)
-  const shouldCreateTypeChecker =
-    options.strictMode && options.projectRoot && options.typeChecker === undefined;
+  // Priority: provided typeCheckerPool > provided typeChecker > create new
+  const hasProvidedPool =
+    options.strictMode && options.typeCheckerPool !== undefined && options.typeCheckerPool !== null;
   const hasProvidedTypeChecker =
-    options.strictMode && options.typeChecker !== undefined && options.typeChecker !== null;
+    options.strictMode &&
+    options.typeChecker !== undefined &&
+    options.typeChecker !== null &&
+    !hasProvidedPool;
+  const shouldCreateTypeChecker =
+    options.strictMode &&
+    options.projectRoot &&
+    options.typeChecker === undefined &&
+    options.typeCheckerPool === undefined;
 
-  if (hasProvidedTypeChecker) {
-    // Use the provided persistent type checker
+  if (hasProvidedPool) {
+    // Use the provided persistent type checker pool (monorepo support)
+    typeCheckerPool = options.typeCheckerPool!;
+    typeChecker = null;
+    if (shouldLogToConsole()) {
+      const isMonorepo = typeCheckerPool.isMonorepo();
+      console.log(
+        `Using persistent TypeScript type checker pool for strict mode analysis${isMonorepo ? ' (monorepo detected)' : ''}.`
+      );
+    }
+  } else if (hasProvidedTypeChecker) {
+    // Use the provided persistent type checker (single project, backwards compatible)
     typeChecker = options.typeChecker!;
-    if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    typeCheckerPool = null;
+    if (shouldLogToConsole()) {
       console.log('Using persistent TypeScript type checker for strict mode analysis.');
     }
   } else if (shouldCreateTypeChecker) {
-    // Create a new type checker
+    // Create a new type checker (single project mode for backwards compatibility)
     typeChecker = createTypeChecker({
       projectRoot: options.projectRoot!,
       tsconfigPath: options.tsconfigPath,
       cacheTypes: true,
     });
+    typeCheckerPool = null;
 
     const initialized = typeChecker.initialize();
     if (!initialized) {
       const error = typeChecker.getInitError();
-      if (
-        process.env.NODE_ENV !== 'test' &&
-        !process.argv.includes('--json') &&
-        !process.argv.includes('--sarif')
-      ) {
+      if (shouldLogToConsole()) {
         console.warn(`Warning: Could not initialize TypeScript type checker: ${error?.message}`);
         console.warn('Falling back to heuristic-based stability detection.');
       }
       typeChecker = null;
-    } else if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    } else if (shouldLogToConsole()) {
       console.log('TypeScript type checker initialized for strict mode analysis.');
     }
   } else {
     typeChecker = null;
+    typeCheckerPool = null;
   }
 
   // First, build cross-file analysis including imported utilities
   // Only show progress if not in test mode and not generating JSON output
-  if (
-    process.env.NODE_ENV !== 'test' &&
-    !process.argv.includes('--json') &&
-    !process.argv.includes('--sarif')
-  ) {
+  if (shouldLogToConsole()) {
     console.log('Building cross-file function call graph...');
   }
   const allFiles = expandToIncludeImportedFiles(parsedFiles);
@@ -174,6 +186,9 @@ export function analyzeHooks(
     typeChecker = null;
   }
 
+  // Clear the pool reference (we never create pools here, only accept provided ones)
+  typeCheckerPool = null;
+
   return results;
 }
 
@@ -195,6 +210,11 @@ function analyzeFileIntelligently(
     // Extract state variables, their setters, and ref variables
     const { stateVariables: stateInfo, refVariables: refVars } = extractStateInfo(ast);
 
+    // Get the appropriate type checker for this file
+    // If we have a pool (monorepo), get the checker for this specific file's tsconfig
+    // Otherwise, use the single type checker (single project mode)
+    const fileTypeChecker = typeCheckerPool?.getCheckerForFile(file.file) ?? typeChecker;
+
     // Extract unstable local variables (objects, arrays, functions created in component body)
     // Pass file path for type-aware stability checking in strict mode
     const stabilityConfig: StabilityConfig = {
@@ -204,7 +224,7 @@ function analyzeFileIntelligently(
       unstableHookPatterns: options.unstableHookPatterns,
       customFunctions: options.customFunctions,
     };
-    const unstableVars = extractUnstableVariables(ast, file.file, typeChecker, stabilityConfig);
+    const unstableVars = extractUnstableVariables(ast, file.file, fileTypeChecker, stabilityConfig);
 
     // Check for setState during render (outside hooks/event handlers)
     const renderStateIssues = detectSetStateDuringRender(ast, stateInfo, file.file, file.content);
@@ -305,7 +325,7 @@ function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
           queue.push(newParsedFile); // Process imports of the new file
         } catch {
           // Warn that file couldn't be parsed - analysis may be incomplete
-          if (process.env.NODE_ENV !== 'test') {
+          if (shouldLogToConsole()) {
             console.warn(
               `Warning: Could not parse imported file ${resolvedPath}. Analysis may be incomplete.`
             );

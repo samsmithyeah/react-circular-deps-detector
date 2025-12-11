@@ -5,11 +5,13 @@
  * - Relative imports (./foo, ../bar)
  * - Path aliases from tsconfig.json (@/components, @utils/helpers)
  * - Node module resolution (index files, package.json main/exports)
+ * - Workspace package resolution (@myorg/shared, etc.)
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { getTsconfig, createPathsMatcher, TsConfigResult } from 'get-tsconfig';
+import { TsconfigManager } from './tsconfig-manager';
 
 export interface PathResolverOptions {
   /** Root directory for the project (where tsconfig.json is located) */
@@ -208,4 +210,132 @@ function resolveWithExtensions(basePath: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * Options for creating a multi-project path resolver
+ */
+export interface MultiProjectPathResolverOptions {
+  /** Root directory of the workspace (for monorepo detection) */
+  workspaceRoot: string;
+  /** TsconfigManager instance for per-file tsconfig resolution */
+  tsconfigManager: TsconfigManager;
+}
+
+/**
+ * Multi-project path resolver for monorepos.
+ *
+ * Handles path resolution across multiple packages in a monorepo:
+ * - Uses per-file tsconfig for path alias resolution
+ * - Resolves workspace package imports (@myorg/shared, etc.)
+ * - Caches resolvers per tsconfig for performance
+ */
+export class MultiProjectPathResolver {
+  private workspaceRoot: string;
+  private tsconfigManager: TsconfigManager;
+  private resolverCache = new Map<string, PathResolver>();
+  private defaultResolver: PathResolver | null = null;
+
+  constructor(options: MultiProjectPathResolverOptions) {
+    this.workspaceRoot = path.resolve(options.workspaceRoot);
+    this.tsconfigManager = options.tsconfigManager;
+
+    // Create default resolver for the workspace root
+    this.defaultResolver = createPathResolver({ projectRoot: this.workspaceRoot });
+  }
+
+  /**
+   * Resolve an import path from a source file.
+   * Uses the source file's governing tsconfig for path alias resolution.
+   *
+   * @param fromFile - The file containing the import
+   * @param importPath - The import path to resolve
+   * @returns Resolved absolute path, or null if not found
+   */
+  resolve(fromFile: string, importPath: string): string | null {
+    // First check if it's a workspace package import
+    const workspaceResolved = this.resolveWorkspacePackage(importPath);
+    if (workspaceResolved) {
+      return resolveWithExtensions(workspaceResolved);
+    }
+
+    // Handle relative imports directly (they don't need tsconfig)
+    if (importPath.startsWith('./') || importPath.startsWith('../')) {
+      return resolveRelativeImport(fromFile, importPath);
+    }
+
+    // Get the resolver for this file's tsconfig
+    const resolver = this.getResolverForFile(fromFile);
+    return resolver.resolve(fromFile, importPath);
+  }
+
+  /**
+   * Resolve a workspace package import to its actual path.
+   * E.g., "@myorg/shared" -> "/path/to/packages/shared/src/index.ts"
+   */
+  resolveWorkspacePackage(importPath: string): string | null {
+    const resolved = this.tsconfigManager.resolveWorkspacePackage(importPath);
+    if (resolved) {
+      return resolved;
+    }
+    return null;
+  }
+
+  /**
+   * Get the appropriate PathResolver for a file based on its tsconfig.
+   */
+  private getResolverForFile(filePath: string): PathResolver {
+    const tsconfig = this.tsconfigManager.getTsconfigForFile(filePath);
+    if (!tsconfig) {
+      return this.defaultResolver!;
+    }
+
+    // Check cache
+    if (this.resolverCache.has(tsconfig.path)) {
+      return this.resolverCache.get(tsconfig.path)!;
+    }
+
+    // Create resolver for this tsconfig
+    const resolver = createPathResolver({
+      projectRoot: tsconfig.directory,
+    });
+
+    this.resolverCache.set(tsconfig.path, resolver);
+    return resolver;
+  }
+
+  /**
+   * Check if this resolver can handle the given import path.
+   */
+  canResolve(fromFile: string, importPath: string): boolean {
+    // Can always handle relative imports
+    if (importPath.startsWith('./') || importPath.startsWith('../')) {
+      return true;
+    }
+
+    // Check if it's a workspace package
+    if (this.tsconfigManager.resolveWorkspacePackage(importPath)) {
+      return true;
+    }
+
+    // Check if the file's tsconfig resolver can handle it
+    const resolver = this.getResolverForFile(fromFile);
+    return resolver.canResolve(importPath);
+  }
+
+  /**
+   * Clear all cached resolvers.
+   */
+  clearCache(): void {
+    this.resolverCache.clear();
+  }
+}
+
+/**
+ * Create a multi-project path resolver for a workspace.
+ */
+export function createMultiProjectPathResolver(
+  options: MultiProjectPathResolverOptions
+): MultiProjectPathResolver {
+  return new MultiProjectPathResolver(options);
 }

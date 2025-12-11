@@ -22,6 +22,7 @@
 import * as ts from 'typescript';
 import * as path from 'path';
 import * as fs from 'fs';
+import { TsconfigManager, createTsconfigManager } from './tsconfig-manager';
 
 export interface TypeCheckerOptions {
   /** Project root directory (where tsconfig.json is located) */
@@ -944,4 +945,214 @@ export function isTypeScriptProject(projectRoot: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * TypeChecker Pool for Monorepo Support
+ *
+ * Manages multiple TypeChecker instances, one per tsconfig.json.
+ * Uses lazy loading - only creates TypeChecker instances when files
+ * from that tsconfig are first queried.
+ *
+ * This enables efficient type checking in monorepos where different
+ * packages have their own tsconfig files with different settings.
+ */
+export class TypeCheckerPool {
+  private checkers = new Map<string, TypeChecker>();
+  private tsconfigManager: TsconfigManager;
+  private workspaceRoot: string;
+  private initErrors = new Map<string, Error>();
+
+  constructor(workspaceRoot: string) {
+    this.workspaceRoot = path.resolve(workspaceRoot);
+    this.tsconfigManager = createTsconfigManager(workspaceRoot);
+  }
+
+  /**
+   * Get the TypeChecker instance for a specific file.
+   * Lazily creates the TypeChecker if it doesn't exist yet.
+   *
+   * @param filePath - The source file to get a TypeChecker for
+   * @returns TypeChecker instance, or null if no tsconfig covers this file
+   */
+  getCheckerForFile(filePath: string): TypeChecker | null {
+    const tsconfig = this.tsconfigManager.getTsconfigForFile(filePath);
+    if (!tsconfig) {
+      return null;
+    }
+
+    return this.getCheckerForTsconfig(tsconfig.path);
+  }
+
+  /**
+   * Get or create a TypeChecker for a specific tsconfig.
+   */
+  private getCheckerForTsconfig(tsconfigPath: string): TypeChecker | null {
+    // Check if we already have a checker for this tsconfig
+    if (this.checkers.has(tsconfigPath)) {
+      return this.checkers.get(tsconfigPath)!;
+    }
+
+    // Check if we've already tried and failed to create a checker
+    if (this.initErrors.has(tsconfigPath)) {
+      return null;
+    }
+
+    // Create a new TypeChecker for this tsconfig
+    try {
+      const checker = new TypeChecker({
+        projectRoot: path.dirname(tsconfigPath),
+        tsconfigPath: tsconfigPath,
+        cacheTypes: true,
+      });
+
+      if (checker.initialize()) {
+        this.checkers.set(tsconfigPath, checker);
+        return checker;
+      } else {
+        const error = checker.getInitError();
+        if (error) {
+          this.initErrors.set(tsconfigPath, error);
+        }
+        return null;
+      }
+    } catch (error) {
+      this.initErrors.set(tsconfigPath, error instanceof Error ? error : new Error(String(error)));
+      return null;
+    }
+  }
+
+  /**
+   * Update a file's content in the appropriate TypeChecker.
+   * Routes the update to the correct TypeChecker based on the file's tsconfig.
+   *
+   * @param filePath - The file that was updated
+   * @param content - The new content of the file
+   */
+  updateFile(filePath: string, content: string): void {
+    const tsconfig = this.tsconfigManager.getTsconfigForFile(filePath);
+    if (tsconfig && this.checkers.has(tsconfig.path)) {
+      this.checkers.get(tsconfig.path)!.updateFile(filePath, content);
+    }
+  }
+
+  /**
+   * Remove a file from the appropriate TypeChecker.
+   *
+   * @param filePath - The file that was deleted
+   */
+  removeFile(filePath: string): void {
+    const tsconfig = this.tsconfigManager.getTsconfigForFile(filePath);
+    if (tsconfig && this.checkers.has(tsconfig.path)) {
+      this.checkers.get(tsconfig.path)!.removeFile(filePath);
+    }
+  }
+
+  /**
+   * Get the TsconfigManager for workspace package resolution.
+   */
+  getTsconfigManager(): TsconfigManager {
+    return this.tsconfigManager;
+  }
+
+  /**
+   * Check if the workspace is a monorepo.
+   */
+  isMonorepo(): boolean {
+    return this.tsconfigManager.isMonorepo();
+  }
+
+  /**
+   * Get the number of TypeChecker instances currently loaded.
+   * Useful for monitoring and debugging.
+   */
+  getLoadedCheckerCount(): number {
+    return this.checkers.size;
+  }
+
+  /**
+   * Get all tsconfig paths that have TypeCheckers loaded.
+   */
+  getLoadedTsconfigPaths(): string[] {
+    return Array.from(this.checkers.keys());
+  }
+
+  /**
+   * Clear the cache for a specific tsconfig.
+   * The TypeChecker will be recreated on next access.
+   */
+  invalidateTsconfig(tsconfigPath: string): void {
+    const absolutePath = path.resolve(tsconfigPath);
+    const checker = this.checkers.get(absolutePath);
+    if (checker) {
+      checker.dispose();
+      this.checkers.delete(absolutePath);
+    }
+    this.initErrors.delete(absolutePath);
+    this.tsconfigManager.invalidateTsconfig(absolutePath);
+  }
+
+  /**
+   * Dispose all TypeChecker instances and clear caches.
+   */
+  dispose(): void {
+    for (const checker of this.checkers.values()) {
+      checker.dispose();
+    }
+    this.checkers.clear();
+    this.initErrors.clear();
+    this.tsconfigManager.clearCache();
+  }
+}
+
+/**
+ * Singleton map for persistent TypeCheckerPool instances per workspace.
+ * Used by the VS Code extension to persist the pool across analyses.
+ */
+const persistentPools = new Map<string, TypeCheckerPool>();
+
+/**
+ * Get or create a persistent TypeCheckerPool for a workspace.
+ * This is used by the VS Code extension to maintain the pool across
+ * file changes, enabling efficient incremental updates.
+ *
+ * @param workspaceRoot - The root directory of the workspace
+ * @returns A persistent TypeCheckerPool instance for the workspace
+ */
+export function getPersistentTypeCheckerPool(workspaceRoot: string): TypeCheckerPool {
+  const normalizedRoot = path.resolve(workspaceRoot);
+
+  let pool = persistentPools.get(normalizedRoot);
+  if (!pool) {
+    pool = new TypeCheckerPool(normalizedRoot);
+    persistentPools.set(normalizedRoot, pool);
+  }
+
+  return pool;
+}
+
+/**
+ * Dispose and remove a persistent TypeCheckerPool.
+ * Call this when a workspace is closed.
+ *
+ * @param workspaceRoot - The workspace root to dispose the pool for
+ */
+export function disposePersistentTypeCheckerPool(workspaceRoot: string): void {
+  const normalizedRoot = path.resolve(workspaceRoot);
+  const pool = persistentPools.get(normalizedRoot);
+  if (pool) {
+    pool.dispose();
+    persistentPools.delete(normalizedRoot);
+  }
+}
+
+/**
+ * Dispose all persistent TypeCheckerPool instances.
+ * Call this when the extension is fully deactivated.
+ */
+export function disposeAllPersistentTypeCheckerPools(): void {
+  for (const pool of persistentPools.values()) {
+    pool.dispose();
+  }
+  persistentPools.clear();
 }

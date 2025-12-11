@@ -18,6 +18,9 @@ import { AstCache } from './cache';
 import type { ParseResult, ParseTask } from './parse-worker';
 import { getChangedFilesSinceRef } from './git-utils';
 import { createPathResolver } from './path-resolver';
+import { createTsconfigManager, MonorepoInfo } from './tsconfig-manager';
+import { TypeCheckerPool, getPersistentTypeCheckerPool } from './type-checker';
+import { shouldLogToConsole } from './utils';
 
 export interface CircularDependency {
   file: string;
@@ -76,6 +79,10 @@ export interface StrictModeDetection {
   enabled: boolean;
   reason: 'explicit' | 'auto-detected' | 'disabled' | 'no-tsconfig';
   tsconfigPath?: string;
+  /** Whether a monorepo structure was detected */
+  isMonorepo?: boolean;
+  /** Type of monorepo (yarn, pnpm, lerna, etc.) */
+  monorepoType?: MonorepoInfo['type'];
 }
 
 /**
@@ -97,19 +104,27 @@ function findTsConfig(targetPath: string): string | null {
 }
 
 /**
- * Determine if strict mode should be enabled based on options and auto-detection
+ * Determine if strict mode should be enabled based on options and auto-detection.
+ * Also detects monorepo structure for multi-tsconfig support.
  */
 function resolveStrictMode(
   targetPath: string,
   options: DetectorOptions,
   config: RcdConfig
 ): StrictModeDetection {
+  // Detect monorepo structure
+  const tsconfigManager = createTsconfigManager(targetPath);
+  const monorepoInfo = tsconfigManager.detectMonorepo();
+  const isMonorepo = monorepoInfo.type !== null;
+
   // 1. Explicit CLI flag takes precedence
   if (options.strict === true) {
     return {
       enabled: true,
       reason: 'explicit',
       tsconfigPath: options.tsconfigPath,
+      isMonorepo,
+      monorepoType: monorepoInfo.type,
     };
   }
 
@@ -117,6 +132,8 @@ function resolveStrictMode(
     return {
       enabled: false,
       reason: 'disabled',
+      isMonorepo,
+      monorepoType: monorepoInfo.type,
     };
   }
 
@@ -126,6 +143,8 @@ function resolveStrictMode(
       enabled: true,
       reason: 'explicit',
       tsconfigPath: config.tsconfigPath,
+      isMonorepo,
+      monorepoType: monorepoInfo.type,
     };
   }
 
@@ -133,6 +152,8 @@ function resolveStrictMode(
     return {
       enabled: false,
       reason: 'disabled',
+      isMonorepo,
+      monorepoType: monorepoInfo.type,
     };
   }
 
@@ -143,6 +164,8 @@ function resolveStrictMode(
       enabled: true,
       reason: 'auto-detected',
       tsconfigPath: detectedTsconfig,
+      isMonorepo,
+      monorepoType: monorepoInfo.type,
     };
   }
 
@@ -150,6 +173,8 @@ function resolveStrictMode(
   return {
     enabled: false,
     reason: 'no-tsconfig',
+    isMonorepo,
+    monorepoType: monorepoInfo.type,
   };
 }
 
@@ -243,6 +268,17 @@ export async function detectCircularDependencies(
   // Resolve strict mode based on explicit flags, config, or auto-detection
   const strictModeDetection = resolveStrictMode(targetPath, options, config);
 
+  // Create TypeCheckerPool if in monorepo mode with strict enabled
+  let typeCheckerPool: TypeCheckerPool | null = null;
+  if (strictModeDetection.enabled && strictModeDetection.isMonorepo) {
+    typeCheckerPool = getPersistentTypeCheckerPool(targetPath);
+    if (shouldLogToConsole()) {
+      console.log(
+        `Monorepo detected (${strictModeDetection.monorepoType}). Using multi-tsconfig type checking.`
+      );
+    }
+  }
+
   // Run intelligent hooks analysis (consolidated single analyzer)
   const rawAnalysis = analyzeHooks(parsedFiles, {
     stableHooks: config.stableHooks,
@@ -254,6 +290,8 @@ export async function detectCircularDependencies(
     strictMode: strictModeDetection.enabled,
     tsconfigPath: strictModeDetection.tsconfigPath || config.tsconfigPath,
     projectRoot: targetPath,
+    // Pass the pool for monorepos, or null for single-project mode
+    typeCheckerPool,
   });
 
   // Filter results based on config
@@ -304,7 +342,7 @@ function parseFilesSequential(files: string[], astCache?: AstCache): ParsedFile[
       const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
       parsedFiles.push(parsed);
     } catch (error) {
-      if (process.env.NODE_ENV !== 'test') {
+      if (shouldLogToConsole()) {
         console.warn(`Warning: Could not parse ${file}:`, error);
       }
     }
@@ -331,11 +369,7 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     idleTimeout: 5000,
   });
 
-  if (
-    process.env.NODE_ENV !== 'test' &&
-    !process.argv.includes('--json') &&
-    !process.argv.includes('--sarif')
-  ) {
+  if (shouldLogToConsole()) {
     console.log(`Parsing ${files.length} files using ${workerCount} worker threads...`);
   }
 
@@ -353,7 +387,7 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     const result = results[i];
     if (result.success && result.data) {
       parsedFiles.push(result.data);
-    } else if (process.env.NODE_ENV !== 'test') {
+    } else if (shouldLogToConsole()) {
       console.warn(`Warning: Could not parse ${files[i]}: ${result.error}`);
     }
   }
