@@ -347,3 +347,15 @@ export function getConfidenceExplanation(
 
   return ` Confidence is ${confidence} because ${reasons.join(', ')}.`;
 }
+
+/**
+ * Check if console logging should be enabled.
+ * Returns false during tests or when JSON/SARIF output is requested.
+ */
+export function shouldLogToConsole(): boolean {
+  return (
+    process.env.NODE_ENV !== 'test' &&
+    !process.argv.includes('--json') &&
+    !process.argv.includes('--sarif')
+  );
+}

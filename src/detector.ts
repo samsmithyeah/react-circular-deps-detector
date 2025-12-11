@@ -20,6 +20,7 @@ import { getChangedFilesSinceRef } from './git-utils';
 import { createPathResolver } from './path-resolver';
 import { createTsconfigManager, MonorepoInfo } from './tsconfig-manager';
 import { TypeCheckerPool, getPersistentTypeCheckerPool } from './type-checker';
+import { shouldLogToConsole } from './utils';
 
 export interface CircularDependency {
   file: string;
@@ -271,11 +272,7 @@ export async function detectCircularDependencies(
   let typeCheckerPool: TypeCheckerPool | null = null;
   if (strictModeDetection.enabled && strictModeDetection.isMonorepo) {
     typeCheckerPool = getPersistentTypeCheckerPool(targetPath);
-    if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    if (shouldLogToConsole()) {
       console.log(
         `Monorepo detected (${strictModeDetection.monorepoType}). Using multi-tsconfig type checking.`
       );
@@ -345,7 +342,7 @@ function parseFilesSequential(files: string[], astCache?: AstCache): ParsedFile[
       const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
       parsedFiles.push(parsed);
     } catch (error) {
-      if (process.env.NODE_ENV !== 'test') {
+      if (shouldLogToConsole()) {
         console.warn(`Warning: Could not parse ${file}:`, error);
       }
     }
@@ -372,11 +369,7 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     idleTimeout: 5000,
   });
 
-  if (
-    process.env.NODE_ENV !== 'test' &&
-    !process.argv.includes('--json') &&
-    !process.argv.includes('--sarif')
-  ) {
+  if (shouldLogToConsole()) {
     console.log(`Parsing ${files.length} files using ${workerCount} worker threads...`);
   }
 
@@ -394,7 +387,7 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     const result = results[i];
     if (result.success && result.data) {
       parsedFiles.push(result.data);
-    } else if (process.env.NODE_ENV !== 'test') {
+    } else if (shouldLogToConsole()) {
       console.warn(`Warning: Could not parse ${files[i]}: ${result.error}`);
     }
   }

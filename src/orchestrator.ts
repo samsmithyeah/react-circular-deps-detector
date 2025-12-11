@@ -39,7 +39,7 @@ import { findHookNodes, analyzeHookNode } from './hook-analyzer';
 import { checkUnstableReferences } from './unstable-refs-detector';
 import { analyzeJsxProps } from './jsx-prop-analyzer';
 import { detectUnstableSyncExternalStore } from './sync-external-store-detector';
-import { setCurrentOptions } from './utils';
+import { setCurrentOptions, shouldLogToConsole } from './utils';
 
 // Re-export types for backward compatibility
 export type { HookAnalysis, AnalyzerOptions, ErrorCode, IssueCategory, DebugInfo } from './types';
@@ -122,11 +122,7 @@ export function analyzeHooks(
     // Use the provided persistent type checker pool (monorepo support)
     typeCheckerPool = options.typeCheckerPool!;
     typeChecker = null;
-    if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    if (shouldLogToConsole()) {
       const isMonorepo = typeCheckerPool.isMonorepo();
       console.log(
         `Using persistent TypeScript type checker pool for strict mode analysis${isMonorepo ? ' (monorepo detected)' : ''}.`
@@ -136,11 +132,7 @@ export function analyzeHooks(
     // Use the provided persistent type checker (single project, backwards compatible)
     typeChecker = options.typeChecker!;
     typeCheckerPool = null;
-    if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    if (shouldLogToConsole()) {
       console.log('Using persistent TypeScript type checker for strict mode analysis.');
     }
   } else if (shouldCreateTypeChecker) {
@@ -155,20 +147,12 @@ export function analyzeHooks(
     const initialized = typeChecker.initialize();
     if (!initialized) {
       const error = typeChecker.getInitError();
-      if (
-        process.env.NODE_ENV !== 'test' &&
-        !process.argv.includes('--json') &&
-        !process.argv.includes('--sarif')
-      ) {
+      if (shouldLogToConsole()) {
         console.warn(`Warning: Could not initialize TypeScript type checker: ${error?.message}`);
         console.warn('Falling back to heuristic-based stability detection.');
       }
       typeChecker = null;
-    } else if (
-      process.env.NODE_ENV !== 'test' &&
-      !process.argv.includes('--json') &&
-      !process.argv.includes('--sarif')
-    ) {
+    } else if (shouldLogToConsole()) {
       console.log('TypeScript type checker initialized for strict mode analysis.');
     }
   } else {
@@ -178,11 +162,7 @@ export function analyzeHooks(
 
   // First, build cross-file analysis including imported utilities
   // Only show progress if not in test mode and not generating JSON output
-  if (
-    process.env.NODE_ENV !== 'test' &&
-    !process.argv.includes('--json') &&
-    !process.argv.includes('--sarif')
-  ) {
+  if (shouldLogToConsole()) {
     console.log('Building cross-file function call graph...');
   }
   const allFiles = expandToIncludeImportedFiles(parsedFiles);
@@ -345,7 +325,7 @@ function expandToIncludeImportedFiles(parsedFiles: ParsedFile[]): ParsedFile[] {
           queue.push(newParsedFile); // Process imports of the new file
         } catch {
           // Warn that file couldn't be parsed - analysis may be incomplete
-          if (process.env.NODE_ENV !== 'test') {
+          if (shouldLogToConsole()) {
             console.warn(
               `Warning: Could not parse imported file ${resolvedPath}. Analysis may be incomplete.`
             );

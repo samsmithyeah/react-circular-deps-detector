@@ -165,19 +165,13 @@ export class TsconfigManager {
     }
 
     // Check if file is in the fileNames list (this handles include/exclude)
-    // Note: parsedConfig.fileNames contains resolved absolute paths
+    // Note: parsedConfig.fileNames contains resolved absolute paths from ts.parseJsonConfigFileContent
+    // which already handles include/exclude patterns correctly
     const normalizedFilePath = path.normalize(filePath);
     for (const fileName of tsconfig.config.fileNames) {
       if (path.normalize(fileName) === normalizedFilePath) {
         return true;
       }
-    }
-
-    // If fileNames is empty or doesn't include our file, check if it's a TypeScript file
-    // in the project directory (TypeScript's default behavior includes all .ts/.tsx files)
-    if (tsconfig.config.fileNames.length === 0) {
-      const ext = path.extname(filePath);
-      return ['.ts', '.tsx', '.js', '.jsx'].includes(ext);
     }
 
     return false;
