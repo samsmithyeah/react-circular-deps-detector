@@ -35,9 +35,9 @@ describe('CLI Hooks Output', () => {
         const execError = error as ExecError;
         const output = execError.stdout || '';
 
-        expect(output).toContain('CONFIRMED infinite loop');
-        expect(output).toContain('CRITICAL - Infinite re-render');
-        expect(output).toContain('Severity: high');
+        expect(output).toContain('Confirmed infinite loops:');
+        expect(output).toContain('[RLD-200]');
+        expect(output).toContain('critical issue');
         expect(output).toContain('hooks-dependency-loop.tsx');
       }
     });
@@ -71,13 +71,10 @@ describe('CLI Hooks Output', () => {
         const execError = error as ExecError;
         const output = execError.stdout || '';
 
-        expect(output).toContain('Summary:');
-        expect(output).toContain('Critical issues:');
+        // Summary is now shown at the top with the verdict
+        expect(output).toMatch(/\d+ critical issue/);
+        expect(output).toMatch(/\d+ infinite loop/);
         expect(output).toContain('Confirmed infinite loops:');
-
-        // Should have non-zero counts
-        expect(output).toMatch(/Critical issues: [1-9]/);
-        expect(output).toMatch(/Confirmed infinite loops: [1-9]/);
       }
     });
 
@@ -91,12 +88,12 @@ describe('CLI Hooks Output', () => {
         );
 
         // If it succeeds, should show success message
-        expect(output).toContain('No circular dependencies or hooks issues found!');
+        expect(output).toContain('All clear! No issues found');
       } catch (error: unknown) {
         // If it finds issues, they should be lower severity
         const execError = error as ExecError;
         const output = execError.stdout || '';
-        expect(output).toContain('React hooks dependency issues');
+        expect(output).toMatch(/issue.*found/);
       }
     });
 
@@ -117,10 +114,9 @@ describe('CLI Hooks Output', () => {
         }
       );
 
-      expect(output).toContain('Summary:');
-      expect(output).toContain('No issues found');
-      expect(output).toContain('No React hooks dependency issues found');
-      expect(output).not.toContain('CONFIRMED infinite loop');
+      expect(output).toContain('All clear! No issues found');
+      expect(output).toMatch(/\d+ files? • \d+ hooks?/);
+      expect(output).not.toContain('Confirmed infinite loops:');
     });
   });
 
@@ -207,9 +203,9 @@ describe('CLI Hooks Output', () => {
         const execError = error as ExecError;
         const output = execError.stdout || '';
 
-        // Should contain severity indicators
-        expect(output).toContain('Severity: high');
-        // Color codes might be stripped in test environment, but structure should be there
+        // Should contain critical issue indicators
+        expect(output).toContain('critical issue');
+        expect(output).toContain('Confirmed infinite loops:');
       }
     });
 
@@ -253,7 +249,7 @@ describe('CLI Hooks Output', () => {
         encoding: 'utf8',
       });
 
-      expect(output).toContain('Files analyzed: 0');
+      expect(output).toMatch(/0 files •/);
     });
 
     it('should show helpful error message for non-existent paths', () => {

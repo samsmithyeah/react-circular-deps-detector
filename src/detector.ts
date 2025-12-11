@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import { cpus } from 'os';
 import micromatch from 'micromatch';
 import Piscina from 'piscina';
+import cliProgress from 'cli-progress';
+import chalk from 'chalk';
 import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { analyzeHooks, HookAnalysis } from './orchestrator';
@@ -21,6 +23,52 @@ import { createPathResolver } from './path-resolver';
 import { createTsconfigManager, MonorepoInfo } from './tsconfig-manager';
 import { TypeCheckerPool, getPersistentTypeCheckerPool } from './type-checker';
 import { shouldLogToConsole } from './utils';
+
+/**
+ * Simple progress tracker interface
+ */
+interface ProgressTracker {
+  update(value: number): void;
+  stop(): void;
+}
+
+/**
+ * Create a progress bar for file parsing.
+ * Uses a visual progress bar in TTY environments, falls back to periodic text updates otherwise.
+ */
+function createProgressBar(total: number): ProgressTracker | null {
+  if (!shouldLogToConsole() || total < 10) {
+    return null; // Don't show progress for small projects or in quiet/json mode
+  }
+
+  const isTTY = process.stdout.isTTY;
+
+  if (isTTY) {
+    // Use visual progress bar in TTY
+    const bar = new cliProgress.SingleBar({
+      format: chalk.cyan('Analyzing') + ' [{bar}] {percentage}% | {value}/{total} files',
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true,
+      clearOnComplete: true,
+      stopOnComplete: true,
+    }, cliProgress.Presets.shades_classic);
+
+    bar.start(total, 0);
+    return bar;
+  } else {
+    // Fallback for non-TTY: single status message at start, clear line at end
+    console.log(`Analyzing ${total} files...`);
+    return {
+      update(_value: number) {
+        // No incremental updates in non-TTY to keep output clean
+      },
+      stop() {
+        // Progress implicitly ends when analysis completes
+      }
+    };
+  }
+}
 
 export interface CircularDependency {
   file: string;
@@ -41,6 +89,10 @@ export interface DetectionResults {
     circularDependencies: number;
     crossFileCycles: number;
     intelligentAnalysisCount: number;
+    /** Number of issues filtered out by config (severity/confidence filters) */
+    filteredCount: number;
+    /** Analysis duration in milliseconds */
+    durationMs: number;
   };
 }
 
@@ -185,6 +237,8 @@ export async function detectCircularDependencies(
   targetPath: string,
   options: DetectorOptions
 ): Promise<DetectionResults> {
+  const startTime = performance.now();
+
   // Load configuration with preset detection
   // Merge order: defaults < presets < config file < options.config
   const configResult = loadConfigWithInfo(targetPath, {
@@ -315,6 +369,8 @@ export async function detectCircularDependencies(
   });
 
   const totalHooks = parsedFiles.reduce((sum, file) => sum + file.hooks.length, 0);
+  const filteredCount = rawAnalysis.length - intelligentHooksAnalysis.length;
+  const durationMs = Math.round(performance.now() - startTime);
 
   return {
     circularDependencies: circularDeps,
@@ -327,6 +383,8 @@ export async function detectCircularDependencies(
       circularDependencies: circularDeps.length,
       crossFileCycles: allCrossFileCycles.length,
       intelligentAnalysisCount: intelligentHooksAnalysis.length,
+      filteredCount,
+      durationMs,
     },
   };
 }
@@ -336,17 +394,22 @@ export async function detectCircularDependencies(
  */
 function parseFilesSequential(files: string[], astCache?: AstCache): ParsedFile[] {
   const parsedFiles: ParsedFile[] = [];
+  const progressBar = createProgressBar(files.length);
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     try {
       const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
       parsedFiles.push(parsed);
     } catch (error) {
-      if (shouldLogToConsole()) {
+      if (shouldLogToConsole() && !progressBar) {
         console.warn(`Warning: Could not parse ${file}:`, error);
       }
     }
+    progressBar?.update(i + 1);
   }
+
+  progressBar?.stop();
 
   // Save cache at the end if caching is enabled
   if (astCache) {
@@ -369,27 +432,41 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     idleTimeout: 5000,
   });
 
-  if (shouldLogToConsole()) {
-    console.log(`Parsing ${files.length} files using ${workerCount} worker threads...`);
-  }
+  const progressBar = createProgressBar(files.length);
+  let completed = 0;
 
-  // Submit all parsing tasks
-  const tasks: Promise<ParseResult>[] = files.map((filePath) =>
-    piscina.run({ filePath } as ParseTask)
+  // Submit all parsing tasks with progress tracking
+  const tasks: Promise<{ result: ParseResult; index: number }>[] = files.map((filePath, index) =>
+    piscina.run({ filePath } as ParseTask).then((result: ParseResult) => {
+      completed++;
+      progressBar?.update(completed);
+      return { result, index };
+    })
   );
 
   // Wait for all tasks to complete
-  const results = await Promise.all(tasks);
+  const taskResults = await Promise.all(tasks);
+  progressBar?.stop();
 
-  // Collect successful results
+  // Collect successful results (maintain order)
   const parsedFiles: ParsedFile[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
+  const errors: { file: string; error: string }[] = [];
+
+  for (const { result, index } of taskResults) {
     if (result.success && result.data) {
       parsedFiles.push(result.data);
-    } else if (shouldLogToConsole()) {
-      console.warn(`Warning: Could not parse ${files[i]}: ${result.error}`);
+    } else {
+      errors.push({ file: files[index], error: result.error || 'Unknown error' });
     }
+  }
+
+  // Show errors after progress bar is done (if any)
+  if (shouldLogToConsole() && errors.length > 0 && errors.length <= 5) {
+    for (const { file, error } of errors) {
+      console.warn(`Warning: Could not parse ${file}: ${error}`);
+    }
+  } else if (shouldLogToConsole() && errors.length > 5) {
+    console.warn(`Warning: Could not parse ${errors.length} files`);
   }
 
   // Destroy the worker pool

@@ -29,6 +29,7 @@ interface CliOptions {
   presets?: boolean; // Commander turns --no-presets into presets: false
   since?: string; // Git ref to compare against (e.g., 'main', 'HEAD~5')
   includeDependents?: boolean; // Include files that import changed files
+  quiet?: boolean; // Suppress output unless there are issues
 }
 
 // SARIF output types
@@ -369,6 +370,7 @@ program
     '--include-dependents',
     'When using --since, also analyze files that import changed files (finds indirect issues)'
   )
+  .option('--quiet', 'Suppress output when no issues are found (useful for CI)')
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -385,7 +387,8 @@ program
         process.exit(1);
       }
 
-      if (!options.json && !options.sarif) {
+      const shouldLog = !options.json && !options.sarif && !options.quiet;
+      if (shouldLog) {
         console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
         console.log(chalk.gray(`Pattern: ${options.pattern}`));
         if (options.since) {
@@ -420,8 +423,8 @@ program
         },
       });
 
-      // Show strict mode status (only for non-JSON/SARIF output)
-      if (!options.json && !options.sarif) {
+      // Show strict mode status (only for non-JSON/SARIF/quiet output)
+      if (shouldLog) {
         const { strictModeDetection } = results;
         if (strictModeDetection.enabled) {
           if (strictModeDetection.reason === 'auto-detected') {
@@ -440,21 +443,33 @@ program
         // Note: 'no-tsconfig' case is silent - no message needed for the common JS-only case
       }
 
-      if (options.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else if (options.sarif) {
-        const sarifReport = generateSarifReport(results);
-        console.log(JSON.stringify(sarifReport, null, 2));
-      } else {
-        formatResults(results, options.compact, options.debug);
-      }
-
-      // Only exit with error for critical issues
+      // Determine if there are any issues (for quiet mode)
       const criticalIssues = results.circularDependencies.length + results.crossFileCycles.length;
       const confirmedLoops = results.intelligentHooksAnalysis.filter(
         (issue) => issue.type === 'confirmed-infinite-loop'
       ).length;
+      const hasIssues = criticalIssues > 0 || confirmedLoops > 0 || results.intelligentHooksAnalysis.length > 0;
 
+      if (options.json) {
+        // Enhanced JSON output with metadata
+        const jsonOutput = {
+          meta: {
+            version: '1.0.0',
+            durationMs: results.summary.durationMs,
+            timestamp: new Date().toISOString(),
+          },
+          ...results,
+        };
+        console.log(JSON.stringify(jsonOutput, null, 2));
+      } else if (options.sarif) {
+        const sarifReport = generateSarifReport(results);
+        console.log(JSON.stringify(sarifReport, null, 2));
+      } else if (!options.quiet || hasIssues) {
+        // Show output if not quiet mode, OR if there are issues to report
+        formatResults(results, options.compact, options.debug, options.quiet);
+      }
+
+      // Exit with error for critical issues
       if (criticalIssues > 0 || confirmedLoops > 0) {
         process.exit(1);
       }
@@ -626,20 +641,32 @@ function displayIssue(issue: HookAnalysis, showDebug?: boolean) {
   console.log();
 }
 
-function formatResults(results: DetectionResults, compact?: boolean, debug?: boolean) {
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function formatResults(results: DetectionResults, compact?: boolean, debug?: boolean, quiet?: boolean) {
   const { circularDependencies, crossFileCycles, intelligentHooksAnalysis, summary } = results;
 
-  let hasIssues = false;
-
-  // Separate by severity type
+  // Separate by severity type (exclude safe-pattern from counts)
   const confirmedIssues = intelligentHooksAnalysis.filter(
     (issue) => issue.type === 'confirmed-infinite-loop'
   );
   const potentialIssues = intelligentHooksAnalysis.filter(
     (issue) => issue.type === 'potential-issue'
   );
+  const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
+  const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
 
-  const totalHooksIssues = confirmedIssues.length + potentialIssues.length;
+  // Only count actual issues, not safe-pattern entries
+  const hooksIssueCount = confirmedIssues.length + potentialIssues.length;
+  const importCyclesCount = circularDependencies.length + crossFileCycles.length;
+  const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
+  const totalIssues = importCyclesCount + hooksIssueCount;
+  const hasIssues = totalIssues > 0;
 
   // COMPACT MODE: Show Unix-style one-line-per-issue output
   if (compact) {
@@ -661,30 +688,83 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
       );
     });
 
-    // Hooks issues
-    intelligentHooksAnalysis.forEach((issue) => {
-      displayCompactIssue(issue);
-    });
+    // Hooks issues (skip safe-pattern)
+    intelligentHooksAnalysis
+      .filter((issue) => issue.type !== 'safe-pattern')
+      .forEach((issue) => {
+        displayCompactIssue(issue);
+      });
 
-    // Brief summary
-    const total =
-      circularDependencies.length + crossFileCycles.length + intelligentHooksAnalysis.length;
-    if (total > 0) {
-      console.log(chalk.gray(`\n${total} issue(s) found`));
+    // Brief summary with timing
+    if (totalIssues > 0) {
+      console.log(chalk.gray(`\n${totalIssues} issue(s) found in ${formatDuration(summary.durationMs)}`));
+    } else {
+      console.log(chalk.green(`\n✓ No issues found in ${formatDuration(summary.durationMs)}`));
     }
     return;
   }
 
-  // VERBOSE MODE (default): Show detailed output
+  // VERBOSE MODE (default): Summary-first format
+  console.log();
+
+  // ═══════════════════════════════════════════════════════════════
+  // SUMMARY HEADER (shown first - the verdict)
+  // ═══════════════════════════════════════════════════════════════
+  if (!hasIssues) {
+    // 🎉 Success celebration
+    console.log(chalk.green.bold('✓ All clear! No issues found'));
+    console.log(chalk.gray(`  ${summary.filesAnalyzed} files • ${summary.hooksAnalyzed} hooks • ${formatDuration(summary.durationMs)}`));
+
+    // Show filtered count if any were hidden
+    if (summary.filteredCount > 0) {
+      console.log(chalk.gray(`  ${summary.filteredCount} low-priority issue(s) hidden by filters`));
+    }
+
+    console.log();
+    return;
+  }
+
+  // There are issues - show summary box
+  if (totalCriticalIssues > 0) {
+    console.log(chalk.red.bold(`✗ ${totalCriticalIssues} critical issue(s) found`));
+  } else {
+    console.log(chalk.yellow.bold(`⚠ ${totalIssues} issue(s) found`));
+  }
+
+  // Show breakdown
+  const parts: string[] = [];
+  if (confirmedIssues.length > 0) {
+    parts.push(chalk.red(`${confirmedIssues.length} infinite loop${confirmedIssues.length > 1 ? 's' : ''}`));
+  }
+  if (importCyclesCount > 0) {
+    parts.push(chalk.red(`${importCyclesCount} import cycle${importCyclesCount > 1 ? 's' : ''}`));
+  }
+  if (warningIssues.length > 0) {
+    parts.push(chalk.yellow(`${warningIssues.length} warning${warningIssues.length > 1 ? 's' : ''}`));
+  }
+  if (performanceIssues.length > 0) {
+    parts.push(chalk.cyan(`${performanceIssues.length} perf issue${performanceIssues.length > 1 ? 's' : ''}`));
+  }
+  if (parts.length > 0) {
+    console.log(chalk.gray(`  ${parts.join(' • ')}`));
+  }
+
+  console.log(chalk.gray(`  ${summary.filesAnalyzed} files • ${summary.hooksAnalyzed} hooks • ${formatDuration(summary.durationMs)}`));
+
+  // Show filtered count if any were hidden
+  if (summary.filteredCount > 0) {
+    console.log(chalk.gray(`  ${summary.filteredCount} additional issue(s) hidden by severity/confidence filters`));
+  }
+
+  console.log();
+
+  // ═══════════════════════════════════════════════════════════════
+  // DETAILED ISSUES (shown after summary)
+  // ═══════════════════════════════════════════════════════════════
 
   // Show import/file-level circular dependencies
-  if (circularDependencies.length === 0) {
-    console.log(chalk.green('✓ No import circular dependencies found'));
-  } else {
-    hasIssues = true;
-    console.log(
-      chalk.red(`\n❌ Found ${circularDependencies.length} import circular dependencies:\n`)
-    );
+  if (circularDependencies.length > 0) {
+    console.log(chalk.red(`Import circular dependencies:\n`));
 
     circularDependencies.forEach((dep: CircularDependency, index: number) => {
       console.log(
@@ -697,11 +777,8 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
   }
 
   // Show cross-file cycles
-  if (crossFileCycles.length === 0) {
-    console.log(chalk.green('✓ No cross-file import cycles found'));
-  } else {
-    hasIssues = true;
-    console.log(chalk.red(`\n❌ Found ${crossFileCycles.length} cross-file import cycles:\n`));
+  if (crossFileCycles.length > 0) {
+    console.log(chalk.red(`Cross-file import cycles:\n`));
 
     crossFileCycles.forEach((cycle: CrossFileCycle, index: number) => {
       console.log(chalk.yellow(`${index + 1}. Import cycle between files:`));
@@ -720,105 +797,49 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
     });
   }
 
-  // Show React hooks analysis results
-  if (totalHooksIssues === 0) {
-    console.log(chalk.green('✓ No React hooks dependency issues found'));
-  } else {
-    hasIssues = true;
+  // Show confirmed infinite loops (critical issues)
+  if (confirmedIssues.length > 0) {
+    console.log(chalk.red(`Confirmed infinite loops:\n`));
 
-    // Show confirmed infinite loops first (critical issues)
-    if (confirmedIssues.length > 0) {
-      console.log(chalk.red(`\n🚨 Found ${confirmedIssues.length} CONFIRMED infinite loop(s):\n`));
-
-      confirmedIssues.forEach((issue, index: number) => {
-        const categoryLabel =
-          issue.category === 'critical' ? 'CRITICAL' : issue.category.toUpperCase();
-        console.log(
-          chalk.redBright(
-            `${index + 1}. 🚨 [${issue.errorCode}] ${categoryLabel} - Infinite re-render`
-          )
-        );
-        console.log(
-          chalk.redBright(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`)
-        );
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
-
-    // Separate performance issues from warning issues
-    const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
-    const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
-
-    // Show warning issues
-    if (warningIssues.length > 0) {
-      console.log(chalk.yellow(`\n⚠️  Found ${warningIssues.length} warning(s) to review:\n`));
-
-      warningIssues.forEach((issue, index: number) => {
-        console.log(
-          chalk.yellow(
-            `${confirmedIssues.length + index + 1}. ⚠️  [${issue.errorCode}] WARNING - ${issue.description}`
-          )
-        );
-        console.log(
-          chalk.yellow(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`)
-        );
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
-
-    // Show performance issues
-    if (performanceIssues.length > 0) {
-      console.log(chalk.cyan(`\n📊 Found ${performanceIssues.length} performance issue(s):\n`));
-
-      performanceIssues.forEach((issue, index: number) => {
-        console.log(
-          chalk.cyan(
-            `${confirmedIssues.length + warningIssues.length + index + 1}. 📊 [${issue.errorCode}] PERFORMANCE - ${issue.description}`
-          )
-        );
-        console.log(chalk.cyan(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`));
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
+    confirmedIssues.forEach((issue, index: number) => {
+      console.log(
+        chalk.redBright(
+          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line}`
+        )
+      );
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 
-  if (!hasIssues) {
-    console.log(chalk.green('\nNo circular dependencies or hooks issues found!'));
-    console.log(chalk.gray('Your React hooks are properly configured.'));
-  }
-
-  // Summary
-  const importCyclesCount = circularDependencies.length + crossFileCycles.length;
-  const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
-  const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
-
-  console.log(chalk.blue('\nSummary:'));
-  console.log(chalk.gray(`Files analyzed: ${summary.filesAnalyzed}`));
-  console.log(chalk.gray(`Hooks analyzed: ${summary.hooksAnalyzed}`));
-
-  const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
-  if (totalCriticalIssues > 0) {
-    console.log(chalk.red(`Critical issues: ${totalCriticalIssues}`));
-    console.log(chalk.gray(`  Import cycles: ${importCyclesCount}`));
-    console.log(chalk.gray(`  Confirmed infinite loops: ${confirmedIssues.length}`));
-  }
-
+  // Show warning issues
   if (warningIssues.length > 0) {
-    console.log(chalk.yellow(`Warnings to review: ${warningIssues.length}`));
+    console.log(chalk.yellow(`Warnings to review:\n`));
+
+    warningIssues.forEach((issue, index: number) => {
+      console.log(
+        chalk.yellow(
+          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line} - ${issue.description}`
+        )
+      );
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 
+  // Show performance issues
   if (performanceIssues.length > 0) {
-    console.log(chalk.cyan(`Performance issues: ${performanceIssues.length}`));
-  }
+    console.log(chalk.cyan(`Performance issues:\n`));
 
-  if (totalCriticalIssues === 0 && potentialIssues.length === 0) {
-    console.log(chalk.green(`No issues found`));
+    performanceIssues.forEach((issue, index: number) => {
+      console.log(
+        chalk.cyan(
+          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line} - ${issue.description}`
+        )
+      );
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 }
 

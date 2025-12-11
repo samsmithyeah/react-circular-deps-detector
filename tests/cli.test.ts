@@ -69,9 +69,8 @@ describe('CLI Integration', () => {
 
       const output = execSync(`node ${cliPath} ${tempDir}`, { encoding: 'utf8' });
 
-      expect(output).toContain('No circular dependencies or hooks issues found!');
-      expect(output).toContain('Files analyzed: 1');
-      expect(output).toContain('Hooks analyzed:');
+      expect(output).toContain('All clear! No issues found');
+      expect(output).toMatch(/1 files? • \d+ hooks?/);
     });
 
     it('should detect circular dependencies and exit with code 1', () => {
@@ -149,7 +148,7 @@ describe('CLI Integration', () => {
 
       // Should contain colored output (ANSI escape codes)
       expect(output).toContain('✓');
-      expect(output).toMatch(/Files analyzed|Hooks analyzed/);
+      expect(output).toMatch(/\d+ files? • \d+ hooks?/);
     });
 
     it('should disable colors when --no-color is used', () => {
@@ -167,7 +166,7 @@ describe('CLI Integration', () => {
       const output = execSync(`node ${cliPath} ${tempDir} --no-color`, { encoding: 'utf8' });
 
       // Should contain plain text output
-      expect(output).toContain('No circular dependencies or hooks issues found!');
+      expect(output).toContain('All clear! No issues found');
     });
   });
 
@@ -193,7 +192,7 @@ describe('CLI Integration', () => {
       // Only analyze .js files
       const output = execSync(`node ${cliPath} ${tempDir} --pattern "*.js"`, { encoding: 'utf8' });
 
-      expect(output).toContain('Files analyzed: 1');
+      expect(output).toMatch(/1 files? •/);
     });
 
     it('should respect ignore patterns', () => {
@@ -219,7 +218,7 @@ describe('CLI Integration', () => {
         encoding: 'utf8',
       });
 
-      expect(output).toContain('Files analyzed: 1');
+      expect(output).toMatch(/1 files? •/);
     });
   });
 
@@ -241,7 +240,7 @@ describe('CLI Integration', () => {
       const output = execSync(`node ${cliPath} ${tempDir}`, { encoding: 'utf8' });
 
       // Should continue and show results even with parsing errors
-      expect(output).toContain('Files analyzed:');
+      expect(output).toMatch(/\d+ files? •/);
     });
   });
 });
