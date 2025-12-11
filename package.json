@@ -1,7 +1,7 @@
 {
   "name": "react-loop-detector",
   "version": "1.0.0",
-  "description": "Detect circular dependencies and infinite re-render risks in React hooks",
+  "description": "Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -87,9 +87,13 @@
     "chalk": "^4.1.2",
     "chokidar": "^5.0.0",
     "commander": "^14.0.0",
+    "figlet": "^1.9.4",
     "get-tsconfig": "^4.13.0",
     "glob": "^11.0.3",
+    "gradient-string": "^3.0.0",
     "micromatch": "^4.0.8",
-    "piscina": "^5.1.4"
+    "ora": "^9.0.0",
+    "piscina": "^5.1.4",
+    "strip-ansi": "^6.0.1"
   }
 }

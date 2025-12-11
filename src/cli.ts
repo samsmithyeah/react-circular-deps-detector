@@ -5,10 +5,82 @@ import * as path from 'path';
 import * as fs from 'fs';
 import chalk from 'chalk';
 import chokidar from 'chokidar';
+import gradient from 'gradient-string';
+import figlet from 'figlet';
 import { codeFrameColumns } from '@babel/code-frame';
+import stripAnsi from 'strip-ansi';
 import { detectCircularDependencies, DetectionResults, CircularDependency } from './detector';
 import { CrossFileCycle } from './module-graph';
 import { HookAnalysis } from './orchestrator';
+
+// Read version from package.json
+const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+const VERSION: string = packageJson.version;
+
+// Custom gradients for different states
+const successGradient = gradient(['#00ff88', '#00d4ff']);
+const errorGradient = gradient(['#ff6b6b', '#ff8e53']);
+const infoGradient = gradient(['#667eea', '#764ba2']);
+const warningGradient = gradient(['#facc15', '#fb923c']);
+
+type GradientFn = ((text: string) => string) & {
+  multiline?: (text: string) => string;
+};
+
+function applyGradientSafe(grad: GradientFn, text: string, multiline = false): string {
+  if (chalk.level === 0) return text;
+  if (multiline && typeof grad.multiline === 'function') {
+    return grad.multiline(text);
+  }
+  return grad(text);
+}
+
+function getTerminalWidth(maxWidth: number): number {
+  const columns = process.stdout.columns ?? maxWidth;
+  return Math.max(40, Math.min(maxWidth, columns - 2));
+}
+
+function centerPlain(text: string, width: number): string {
+  if (text.length >= width) return text.slice(0, width);
+  const left = Math.floor((width - text.length) / 2);
+  const right = width - text.length - left;
+  return ' '.repeat(left) + text + ' '.repeat(right);
+}
+
+function visibleLength(text: string): number {
+  return stripAnsi(text).length;
+}
+
+function centerAnsi(text: string, width: number): string {
+  const len = visibleLength(text);
+  if (len >= width) {
+    // Truncate safely by dropping ANSI when too long
+    return stripAnsi(text).slice(0, width);
+  }
+  const left = Math.floor((width - len) / 2);
+  const right = width - len - left;
+  return ' '.repeat(left) + text + ' '.repeat(right);
+}
+
+function printBanner(): void {
+  if (!process.stdout.isTTY || chalk.level === 0) return;
+
+  try {
+    const title = figlet.textSync('React Loop Detector', { font: 'Slant' });
+    console.log(applyGradientSafe(infoGradient, title, true));
+  } catch {
+    console.log(applyGradientSafe(infoGradient, 'React Loop Detector'));
+  }
+
+  const rule = '─'.repeat(Math.min(process.stdout.columns ?? 60, 60));
+  console.log(chalk.gray(rule));
+  console.log(
+    chalk.gray(
+      'Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.\n'
+    )
+  );
+}
 
 interface CliOptions {
   pattern: string;
@@ -29,6 +101,7 @@ interface CliOptions {
   presets?: boolean; // Commander turns --no-presets into presets: false
   since?: string; // Git ref to compare against (e.g., 'main', 'HEAD~5')
   includeDependents?: boolean; // Include files that import changed files
+  quiet?: boolean; // Suppress output unless there are issues
 }
 
 // SARIF output types
@@ -279,7 +352,7 @@ function generateSarifReport(results: DetectionResults): SarifReport {
         tool: {
           driver: {
             name: 'react-loop-detector',
-            version: '1.0.0',
+            version: VERSION,
             informationUri: 'https://github.com/samsmithyeah/react-loop-detector',
             rules,
           },
@@ -328,8 +401,10 @@ const program = new Command();
 
 program
   .name('react-loop-detector')
-  .description('Detect circular import dependencies and React hooks infinite re-render risks')
-  .version('1.0.0')
+  .description(
+    'Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.'
+  )
+  .version(VERSION)
   .argument('<path>', 'Path to React project or file to analyze')
   .option('-p, --pattern <pattern>', 'Glob pattern for files to analyze', '**/*.{js,jsx,ts,tsx}')
   .option('-i, --ignore <patterns...>', 'Patterns to ignore', [
@@ -369,6 +444,7 @@ program
     '--include-dependents',
     'When using --since, also analyze files that import changed files (finds indirect issues)'
   )
+  .option('--quiet', 'Suppress output when no issues are found (useful for CI)')
   .action(async (targetPath: string, options: CliOptions) => {
     try {
       // Disable colors if --no-color flag is used
@@ -385,17 +461,41 @@ program
         process.exit(1);
       }
 
-      if (!options.json && !options.sarif) {
-        console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
-        console.log(chalk.gray(`Pattern: ${options.pattern}`));
-        if (options.since) {
-          console.log(
-            chalk.yellow(
-              `Changed files mode: Only analyzing files changed since '${options.since}'`
-            )
-          );
-          if (options.includeDependents) {
-            console.log(chalk.gray(`  Including files that import changed files`));
+      const shouldLog = !options.json && !options.sarif && !options.quiet;
+      if (shouldLog) {
+        const isTTY = process.stdout.isTTY;
+        if (isTTY) {
+          printBanner();
+          console.log(infoGradient('Target'));
+          console.log(chalk.whiteBright(`  ${absolutePath}`));
+          console.log(chalk.gray(`  Pattern: ${options.pattern}`));
+          if (options.cache) {
+            console.log(chalk.gray('  Cache: enabled'));
+          }
+          if (options.parallel) {
+            console.log(chalk.gray(`  Parallel parsing: ${options.workers || 'auto'} workers`));
+          }
+          if (options.since) {
+            console.log(
+              chalk.yellow(
+                `  Changed files mode: since '${options.since}'${options.includeDependents ? ' (+ dependents)' : ''}`
+              )
+            );
+          }
+          console.log();
+        } else {
+          // Preserve clean, stable output for non-TTY/CI
+          console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
+          console.log(chalk.gray(`Pattern: ${options.pattern}`));
+          if (options.since) {
+            console.log(
+              chalk.yellow(
+                `Changed files mode: Only analyzing files changed since '${options.since}'`
+              )
+            );
+            if (options.includeDependents) {
+              console.log(chalk.gray(`  Including files that import changed files`));
+            }
           }
         }
       }
@@ -420,8 +520,8 @@ program
         },
       });
 
-      // Show strict mode status (only for non-JSON/SARIF output)
-      if (!options.json && !options.sarif) {
+      // Show strict mode status (only for non-JSON/SARIF/quiet output)
+      if (shouldLog) {
         const { strictModeDetection } = results;
         if (strictModeDetection.enabled) {
           if (strictModeDetection.reason === 'auto-detected') {
@@ -440,21 +540,34 @@ program
         // Note: 'no-tsconfig' case is silent - no message needed for the common JS-only case
       }
 
-      if (options.json) {
-        console.log(JSON.stringify(results, null, 2));
-      } else if (options.sarif) {
-        const sarifReport = generateSarifReport(results);
-        console.log(JSON.stringify(sarifReport, null, 2));
-      } else {
-        formatResults(results, options.compact, options.debug);
-      }
-
-      // Only exit with error for critical issues
+      // Determine if there are any issues (for quiet mode)
       const criticalIssues = results.circularDependencies.length + results.crossFileCycles.length;
       const confirmedLoops = results.intelligentHooksAnalysis.filter(
         (issue) => issue.type === 'confirmed-infinite-loop'
       ).length;
+      const hasIssues =
+        criticalIssues > 0 || confirmedLoops > 0 || results.intelligentHooksAnalysis.length > 0;
 
+      if (options.json) {
+        // Enhanced JSON output with metadata
+        const jsonOutput = {
+          meta: {
+            version: VERSION,
+            durationMs: results.summary.durationMs,
+            timestamp: new Date().toISOString(),
+          },
+          ...results,
+        };
+        console.log(JSON.stringify(jsonOutput, null, 2));
+      } else if (options.sarif) {
+        const sarifReport = generateSarifReport(results);
+        console.log(JSON.stringify(sarifReport, null, 2));
+      } else if (!options.quiet || hasIssues) {
+        // Show output if not quiet mode, OR if there are issues to report
+        formatResults(results, options.compact, options.debug);
+      }
+
+      // Exit with error for critical issues
       if (criticalIssues > 0 || confirmedLoops > 0) {
         process.exit(1);
       }
@@ -626,20 +739,128 @@ function displayIssue(issue: HookAnalysis, showDebug?: boolean) {
   console.log();
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/**
+ * Create a visually appealing success message
+ */
+function createSuccessBox(files: number, hooks: number, duration: string): string {
+  const isTTY = process.stdout.isTTY;
+
+  if (!isTTY) {
+    return `✓ All clear! No issues found\n  ${files} files • ${hooks} hooks • ${duration}`;
+  }
+
+  const innerWidth = getTerminalWidth(68);
+  const border = chalk.greenBright;
+
+  const top = border(`╭${'─'.repeat(innerWidth)}╮`);
+  const bottom = border(`╰${'─'.repeat(innerWidth)}╯`);
+  const empty = border(`│${' '.repeat(innerWidth)}│`);
+
+  const headerPlain = '✓ All clear! No issues found';
+  const statsPlain = `${files} files • ${hooks} hooks • ${duration}`;
+
+  const headerCentered = centerPlain(headerPlain, innerWidth);
+  const statsCentered = centerPlain(statsPlain, innerWidth);
+
+  const header = applyGradientSafe(successGradient, headerCentered);
+  const stats = chalk.gray(statsCentered);
+
+  const headerLine = border('│') + header + border('│');
+  const statsLine = border('│') + stats + border('│');
+
+  return [top, empty, headerLine, statsLine, empty, bottom].join('\n');
+}
+
+/**
+ * Create a visually appealing error summary
+ */
+function createErrorSummary(
+  criticalCount: number,
+  warningCount: number,
+  perfCount: number,
+  files: number,
+  hooks: number,
+  duration: string
+): string {
+  const isTTY = process.stdout.isTTY;
+
+  const total = criticalCount + warningCount + perfCount;
+  const parts: string[] = [];
+
+  if (criticalCount > 0) {
+    parts.push(chalk.red.bold(`${criticalCount} critical`));
+  }
+  if (warningCount > 0) {
+    parts.push(chalk.yellow(`${warningCount} warning${warningCount > 1 ? 's' : ''}`));
+  }
+  if (perfCount > 0) {
+    parts.push(chalk.cyan(`${perfCount} perf`));
+  }
+
+  if (!isTTY) {
+    const symbol = criticalCount > 0 ? '✗' : '!';
+    return `${symbol} ${total} issue(s) found\n  ${parts.join(' • ')}\n  ${files} files • ${hooks} hooks • ${duration}`;
+  }
+
+  const innerWidth = getTerminalWidth(74);
+  const borderColor = criticalCount > 0 ? chalk.redBright : chalk.yellowBright;
+
+  const top = borderColor(`╭${'─'.repeat(innerWidth)}╮`);
+  const bottom = borderColor(`╰${'─'.repeat(innerWidth)}╯`);
+  const empty = borderColor(`│${' '.repeat(innerWidth)}│`);
+
+  const titlePlain =
+    criticalCount > 0
+      ? `✗ ${total} issue${total > 1 ? 's' : ''} found`
+      : `! ${total} issue${total > 1 ? 's' : ''} found`;
+
+  const statsPlain = `${files} files • ${hooks} hooks • ${duration}`;
+
+  const titleCentered = centerPlain(titlePlain, innerWidth);
+  const statsCentered = centerPlain(statsPlain, innerWidth);
+
+  const title =
+    criticalCount > 0
+      ? applyGradientSafe(errorGradient, titleCentered)
+      : applyGradientSafe(warningGradient, titleCentered);
+
+  const partsColored = parts.join(chalk.gray(' • '));
+  const partsCenteredAnsi = centerAnsi(partsColored, innerWidth);
+  const partsLine = partsCenteredAnsi;
+  const statsLine = chalk.gray(statsCentered);
+
+  const titleLine = borderColor('│') + title + borderColor('│');
+  const partsLineBox = borderColor('│') + partsLine + borderColor('│');
+  const statsLineBox = borderColor('│') + statsLine + borderColor('│');
+
+  return [top, empty, titleLine, partsLineBox, statsLineBox, empty, bottom].join('\n');
+}
+
 function formatResults(results: DetectionResults, compact?: boolean, debug?: boolean) {
   const { circularDependencies, crossFileCycles, intelligentHooksAnalysis, summary } = results;
 
-  let hasIssues = false;
-
-  // Separate by severity type
+  // Separate by severity type (exclude safe-pattern from counts)
   const confirmedIssues = intelligentHooksAnalysis.filter(
     (issue) => issue.type === 'confirmed-infinite-loop'
   );
   const potentialIssues = intelligentHooksAnalysis.filter(
     (issue) => issue.type === 'potential-issue'
   );
+  const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
+  const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
 
-  const totalHooksIssues = confirmedIssues.length + potentialIssues.length;
+  // Only count actual issues, not safe-pattern entries
+  const hooksIssueCount = confirmedIssues.length + potentialIssues.length;
+  const importCyclesCount = circularDependencies.length + crossFileCycles.length;
+  const totalIssues = importCyclesCount + hooksIssueCount;
+  const hasIssues = totalIssues > 0;
 
   // COMPACT MODE: Show Unix-style one-line-per-issue output
   if (compact) {
@@ -661,30 +882,82 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
       );
     });
 
-    // Hooks issues
-    intelligentHooksAnalysis.forEach((issue) => {
-      displayCompactIssue(issue);
-    });
+    // Hooks issues (skip safe-pattern)
+    intelligentHooksAnalysis
+      .filter((issue) => issue.type !== 'safe-pattern')
+      .forEach((issue) => {
+        displayCompactIssue(issue);
+      });
 
-    // Brief summary
-    const total =
-      circularDependencies.length + crossFileCycles.length + intelligentHooksAnalysis.length;
-    if (total > 0) {
-      console.log(chalk.gray(`\n${total} issue(s) found`));
+    // Brief summary with timing
+    if (totalIssues > 0) {
+      console.log(
+        chalk.gray(`\n${totalIssues} issue(s) found in ${formatDuration(summary.durationMs)}`)
+      );
+    } else {
+      console.log(chalk.green(`\n✓ No issues found in ${formatDuration(summary.durationMs)}`));
     }
     return;
   }
 
-  // VERBOSE MODE (default): Show detailed output
+  // VERBOSE MODE (default): Summary-first format
+  console.log();
+
+  const duration = formatDuration(summary.durationMs);
+  const criticalCount = confirmedIssues.length + importCyclesCount;
+
+  // ═══════════════════════════════════════════════════════════════
+  // SUMMARY HEADER (shown first - the verdict)
+  // ═══════════════════════════════════════════════════════════════
+  if (!hasIssues) {
+    // 🎉 Success celebration with visual box
+    console.log(createSuccessBox(summary.filesAnalyzed, summary.hooksAnalyzed, duration));
+
+    // Show filtered count if any were hidden
+    if (summary.filteredCount > 0) {
+      console.log(chalk.gray(`  ${summary.filteredCount} low-priority issue(s) hidden by filters`));
+    }
+
+    console.log();
+    return;
+  }
+
+  // There are issues - show error summary box
+  console.log(
+    createErrorSummary(
+      criticalCount,
+      warningIssues.length,
+      performanceIssues.length,
+      summary.filesAnalyzed,
+      summary.hooksAnalyzed,
+      duration
+    )
+  );
+
+  // Show filtered count if any were hidden
+  if (summary.filteredCount > 0) {
+    console.log(
+      chalk.gray(
+        `  ${summary.filteredCount} additional issue(s) hidden by severity/confidence filters`
+      )
+    );
+  }
+
+  console.log();
+
+  // ═══════════════════════════════════════════════════════════════
+  // DETAILED ISSUES (shown after summary)
+  // ═══════════════════════════════════════════════════════════════
+
+  const isTTY = process.stdout.isTTY;
 
   // Show import/file-level circular dependencies
-  if (circularDependencies.length === 0) {
-    console.log(chalk.green('✓ No import circular dependencies found'));
-  } else {
-    hasIssues = true;
-    console.log(
-      chalk.red(`\n❌ Found ${circularDependencies.length} import circular dependencies:\n`)
-    );
+  if (circularDependencies.length > 0) {
+    const headerText = `━━━ Import Cycles (${circularDependencies.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Import circular dependencies:';
+    console.log(header + '\n');
 
     circularDependencies.forEach((dep: CircularDependency, index: number) => {
       console.log(
@@ -697,11 +970,12 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
   }
 
   // Show cross-file cycles
-  if (crossFileCycles.length === 0) {
-    console.log(chalk.green('✓ No cross-file import cycles found'));
-  } else {
-    hasIssues = true;
-    console.log(chalk.red(`\n❌ Found ${crossFileCycles.length} cross-file import cycles:\n`));
+  if (crossFileCycles.length > 0) {
+    const headerText = `━━━ Cross-File Cycles (${crossFileCycles.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Cross-file import cycles:';
+    console.log(header + '\n');
 
     crossFileCycles.forEach((cycle: CrossFileCycle, index: number) => {
       console.log(chalk.yellow(`${index + 1}. Import cycle between files:`));
@@ -720,105 +994,66 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
     });
   }
 
-  // Show React hooks analysis results
-  if (totalHooksIssues === 0) {
-    console.log(chalk.green('✓ No React hooks dependency issues found'));
-  } else {
-    hasIssues = true;
+  // Show confirmed infinite loops (critical issues)
+  if (confirmedIssues.length > 0) {
+    const headerText = `━━━ 🔥 Infinite Loops (${confirmedIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Confirmed infinite loops:';
+    console.log(header + '\n');
 
-    // Show confirmed infinite loops first (critical issues)
-    if (confirmedIssues.length > 0) {
-      console.log(chalk.red(`\n🚨 Found ${confirmedIssues.length} CONFIRMED infinite loop(s):\n`));
-
-      confirmedIssues.forEach((issue, index: number) => {
-        const categoryLabel =
-          issue.category === 'critical' ? 'CRITICAL' : issue.category.toUpperCase();
-        console.log(
-          chalk.redBright(
-            `${index + 1}. 🚨 [${issue.errorCode}] ${categoryLabel} - Infinite re-render`
-          )
-        );
-        console.log(
-          chalk.redBright(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`)
-        );
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
-
-    // Separate performance issues from warning issues
-    const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
-    const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
-
-    // Show warning issues
-    if (warningIssues.length > 0) {
-      console.log(chalk.yellow(`\n⚠️  Found ${warningIssues.length} warning(s) to review:\n`));
-
-      warningIssues.forEach((issue, index: number) => {
-        console.log(
-          chalk.yellow(
-            `${confirmedIssues.length + index + 1}. ⚠️  [${issue.errorCode}] WARNING - ${issue.description}`
-          )
-        );
-        console.log(
-          chalk.yellow(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`)
-        );
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
-
-    // Show performance issues
-    if (performanceIssues.length > 0) {
-      console.log(chalk.cyan(`\n📊 Found ${performanceIssues.length} performance issue(s):\n`));
-
-      performanceIssues.forEach((issue, index: number) => {
-        console.log(
-          chalk.cyan(
-            `${confirmedIssues.length + warningIssues.length + index + 1}. 📊 [${issue.errorCode}] PERFORMANCE - ${issue.description}`
-          )
-        );
-        console.log(chalk.cyan(`   Severity: ${issue.severity} | Confidence: ${issue.confidence}`));
-        console.log();
-
-        displayIssue(issue, debug);
-      });
-    }
+    confirmedIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
+      console.log(
+        chalk.redBright(`${index + 1}. `) +
+          chalk.red(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
+      );
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 
-  if (!hasIssues) {
-    console.log(chalk.green('\nNo circular dependencies or hooks issues found!'));
-    console.log(chalk.gray('Your React hooks are properly configured.'));
-  }
-
-  // Summary
-  const importCyclesCount = circularDependencies.length + crossFileCycles.length;
-  const warningIssues = potentialIssues.filter((issue) => issue.category === 'warning');
-  const performanceIssues = potentialIssues.filter((issue) => issue.category === 'performance');
-
-  console.log(chalk.blue('\nSummary:'));
-  console.log(chalk.gray(`Files analyzed: ${summary.filesAnalyzed}`));
-  console.log(chalk.gray(`Hooks analyzed: ${summary.hooksAnalyzed}`));
-
-  const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
-  if (totalCriticalIssues > 0) {
-    console.log(chalk.red(`Critical issues: ${totalCriticalIssues}`));
-    console.log(chalk.gray(`  Import cycles: ${importCyclesCount}`));
-    console.log(chalk.gray(`  Confirmed infinite loops: ${confirmedIssues.length}`));
-  }
-
+  // Show warning issues
   if (warningIssues.length > 0) {
-    console.log(chalk.yellow(`Warnings to review: ${warningIssues.length}`));
+    const headerText = `━━━ ⚠️  Warnings (${warningIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.yellow.bold(applyGradientSafe(warningGradient, headerText))
+      : 'Warnings to review:';
+    console.log(header + '\n');
+
+    warningIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
+      console.log(
+        chalk.yellow(`${index + 1}. `) +
+          chalk.yellow(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
+      );
+      console.log(chalk.gray(`   ${issue.description}`));
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 
+  // Show performance issues
   if (performanceIssues.length > 0) {
-    console.log(chalk.cyan(`Performance issues: ${performanceIssues.length}`));
-  }
+    const headerText = `━━━ ⚡ Performance (${performanceIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.cyan.bold(applyGradientSafe(infoGradient, headerText))
+      : 'Performance issues:';
+    console.log(header + '\n');
 
-  if (totalCriticalIssues === 0 && potentialIssues.length === 0) {
-    console.log(chalk.green(`No issues found`));
+    performanceIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
+      console.log(
+        chalk.cyan(`${index + 1}. `) +
+          chalk.cyan(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
+      );
+      console.log(chalk.gray(`   ${issue.description}`));
+      console.log();
+      displayIssue(issue, debug);
+    });
   }
 }
 

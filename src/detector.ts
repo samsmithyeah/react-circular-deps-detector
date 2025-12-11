@@ -4,6 +4,9 @@ import * as fs from 'fs';
 import { cpus } from 'os';
 import micromatch from 'micromatch';
 import Piscina from 'piscina';
+import chalk from 'chalk';
+import ora from 'ora';
+import gradient from 'gradient-string';
 import { parseFile, parseFileWithCache, HookInfo, ParsedFile } from './parser';
 import { buildModuleGraph, detectAdvancedCrossFileCycles, CrossFileCycle } from './module-graph';
 import { analyzeHooks, HookAnalysis } from './orchestrator';
@@ -21,6 +24,135 @@ import { createPathResolver } from './path-resolver';
 import { createTsconfigManager, MonorepoInfo } from './tsconfig-manager';
 import { TypeCheckerPool, getPersistentTypeCheckerPool } from './type-checker';
 import { shouldLogToConsole } from './utils';
+
+/**
+ * Simple progress tracker interface
+ */
+interface ProgressTracker {
+  update(value: number): void;
+  stop(): void;
+  succeed?(message?: string): void;
+}
+
+/**
+ * Create a progress bar for file parsing.
+ * Uses a visual progress bar in TTY environments, falls back to periodic text updates otherwise.
+ */
+function createProgressBar(total: number): ProgressTracker | null {
+  if (!shouldLogToConsole() || total < 10) {
+    return null; // Don't show progress for small projects or in quiet/json mode
+  }
+
+  const isTTY = process.stdout.isTTY;
+
+  if (isTTY) {
+    const useColor = chalk.level > 0;
+    const startTime = performance.now();
+    let lastRender = 0;
+    let stopped = false;
+
+    const spinner = ora({
+      text: `Parsing 0/${total} files`,
+      spinner: 'dots',
+      color: 'cyan',
+    }).start();
+
+    const formatDurationShort = (ms: number): string => {
+      if (ms < 1000) return `${Math.round(ms)}ms`;
+      const s = ms / 1000;
+      if (s < 60) return `${s.toFixed(1)}s`;
+      const m = Math.floor(s / 60);
+      const remS = Math.round(s % 60);
+      return `${m}m ${remS}s`;
+    };
+
+    const render = (value: number) => {
+      if (stopped) return;
+      const now = performance.now();
+      if (now - lastRender < 80 && value < total) return; // throttle updates
+      lastRender = now;
+
+      const ratio = total === 0 ? 1 : value / total;
+      const pct = Math.min(100, Math.round(ratio * 100));
+      const columns = process.stdout.columns ?? 80;
+
+      const elapsedMs = now - startTime;
+      const elapsedSec = elapsedMs / 1000;
+      const speed = elapsedSec > 0 ? value / elapsedSec : 0;
+      const etaMs = speed > 0 ? ((total - value) / speed) * 1000 : 0;
+
+      const labelPlain = 'Parsing';
+      const pctPlain = `${pct}%`;
+      const countPlain = `(${value}/${total} files)`;
+      const elapsedPlain = `elapsed ${formatDurationShort(elapsedMs)}`;
+      const etaPlain = etaMs > 0 ? `ETA ${formatDurationShort(etaMs)}` : '';
+      const speedPlain = speed > 0 ? `${speed.toFixed(1)} files/s` : '';
+
+      const suffixParts = [pctPlain, countPlain, elapsedPlain, etaPlain, speedPlain].filter(
+        Boolean
+      );
+      const suffixPlain = suffixParts.join(' • ');
+
+      const reserved = labelPlain.length + 1 + suffixPlain.length + 2; // spaces around bar
+      const barWidth = Math.max(10, Math.min(40, columns - reserved));
+
+      const filled = Math.round(ratio * barWidth);
+      const empty = Math.max(0, barWidth - filled);
+      const filledStr = '█'.repeat(filled);
+      const emptyStr = '░'.repeat(empty);
+
+      const bar = useColor
+        ? gradient(['#00d4ff', '#7b61ff', '#ff6ad5'])(filledStr) + chalk.gray(emptyStr)
+        : filledStr + emptyStr;
+
+      const label = useColor ? chalk.cyanBright(labelPlain) : labelPlain;
+      const suffix = useColor ? chalk.gray(suffixPlain) : suffixPlain;
+
+      spinner.text = `${label} ${bar} ${suffix}`;
+    };
+
+    render(0);
+
+    return {
+      update(value: number) {
+        render(value);
+      },
+      stop() {
+        if (stopped) return;
+        stopped = true;
+        spinner.stop();
+      },
+      succeed(message?: string) {
+        if (stopped) return;
+        stopped = true;
+        spinner.succeed(message || `Parsed ${total} files`);
+      },
+    };
+  } else {
+    // Fallback for non-TTY: single status message at start
+    console.log(`Analyzing ${total} files...`);
+    return {
+      update(_value: number) {
+        // No incremental updates in non-TTY to keep output clean
+      },
+      stop() {
+        // Progress implicitly ends when analysis completes
+      },
+    };
+  }
+}
+
+type StageSpinner = ReturnType<typeof ora> | null;
+
+function createStageSpinner(
+  text: string,
+  color: 'cyan' | 'magenta' | 'yellow' = 'cyan'
+): StageSpinner {
+  if (!shouldLogToConsole() || !process.stdout.isTTY) {
+    return null;
+  }
+  return ora({ text, spinner: 'dots', color }).start();
+}
 
 export interface CircularDependency {
   file: string;
@@ -41,6 +173,10 @@ export interface DetectionResults {
     circularDependencies: number;
     crossFileCycles: number;
     intelligentAnalysisCount: number;
+    /** Number of issues filtered out by config (severity/confidence filters) */
+    filteredCount: number;
+    /** Analysis duration in milliseconds */
+    durationMs: number;
   };
 }
 
@@ -185,6 +321,8 @@ export async function detectCircularDependencies(
   targetPath: string,
   options: DetectorOptions
 ): Promise<DetectionResults> {
+  const startTime = performance.now();
+
   // Load configuration with preset detection
   // Merge order: defaults < presets < config file < options.config
   const configResult = loadConfigWithInfo(targetPath, {
@@ -199,10 +337,12 @@ export async function detectCircularDependencies(
   const mergedOptions = { ...options, ignore: mergedIgnore };
 
   // Get all files matching the pattern
+  const scanSpinner = createStageSpinner(`Scanning files (${options.pattern})…`, 'cyan');
   const allFiles = await findFiles(targetPath, mergedOptions);
 
   // Filter to React files first
   const allReactFiles = allFiles.filter((file) => isLikelyReactFile(file));
+  scanSpinner?.succeed(`Found ${allReactFiles.length} React files`);
 
   // Apply git-based filtering if --since is specified
   let reactFiles: string[];
@@ -225,12 +365,14 @@ export async function detectCircularDependencies(
 
     // If --include-dependents is specified, find files that import changed files
     if (options.includeDependents && reactFiles.length > 0) {
+      const dependentsSpinner = createStageSpinner(`Resolving dependents…`, 'cyan');
       // Scan all React files to find which ones import the changed files
       const dependentFiles = await findFilesImportingChangedFiles(
         allReactFiles,
         changedFilesSet,
         targetPath
       );
+      dependentsSpinner?.succeed(`Added ${dependentFiles.length} dependent files`);
 
       // Combine changed files and their dependents, ensuring uniqueness
       reactFiles = Array.from(new Set([...reactFiles, ...dependentFiles]));
@@ -259,11 +401,13 @@ export async function detectCircularDependencies(
   const circularDeps = findCircularDependencies(parsedFiles);
 
   // Build module graph and detect cross-file cycles
+  const graphSpinner = createStageSpinner('Building import graph…', 'cyan');
   const moduleGraph = buildModuleGraph(parsedFiles);
   const allCrossFileCycles = [
     ...moduleGraph.crossFileCycles,
     ...detectAdvancedCrossFileCycles(parsedFiles),
   ];
+  graphSpinner?.succeed('Import graph built');
 
   // Resolve strict mode based on explicit flags, config, or auto-detection
   const strictModeDetection = resolveStrictMode(targetPath, options, config);
@@ -280,6 +424,7 @@ export async function detectCircularDependencies(
   }
 
   // Run intelligent hooks analysis (consolidated single analyzer)
+  const hooksSpinner = createStageSpinner('Analyzing hooks & stability…', 'magenta');
   const rawAnalysis = analyzeHooks(parsedFiles, {
     stableHooks: config.stableHooks,
     unstableHooks: config.unstableHooks,
@@ -313,8 +458,13 @@ export async function detectCircularDependencies(
 
     return true;
   });
+  hooksSpinner?.succeed(
+    `Hooks analysis complete (${rawAnalysis.length} finding${rawAnalysis.length === 1 ? '' : 's'})`
+  );
 
   const totalHooks = parsedFiles.reduce((sum, file) => sum + file.hooks.length, 0);
+  const filteredCount = rawAnalysis.length - intelligentHooksAnalysis.length;
+  const durationMs = Math.round(performance.now() - startTime);
 
   return {
     circularDependencies: circularDeps,
@@ -327,6 +477,8 @@ export async function detectCircularDependencies(
       circularDependencies: circularDeps.length,
       crossFileCycles: allCrossFileCycles.length,
       intelligentAnalysisCount: intelligentHooksAnalysis.length,
+      filteredCount,
+      durationMs,
     },
   };
 }
@@ -336,16 +488,25 @@ export async function detectCircularDependencies(
  */
 function parseFilesSequential(files: string[], astCache?: AstCache): ParsedFile[] {
   const parsedFiles: ParsedFile[] = [];
+  const progressBar = createProgressBar(files.length);
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     try {
       const parsed = astCache ? parseFileWithCache(file, astCache) : parseFile(file);
       parsedFiles.push(parsed);
     } catch (error) {
-      if (shouldLogToConsole()) {
+      if (shouldLogToConsole() && !progressBar) {
         console.warn(`Warning: Could not parse ${file}:`, error);
       }
     }
+    progressBar?.update(i + 1);
+  }
+
+  if (progressBar?.succeed) {
+    progressBar.succeed();
+  } else {
+    progressBar?.stop();
   }
 
   // Save cache at the end if caching is enabled
@@ -369,27 +530,45 @@ async function parseFilesParallel(files: string[], numWorkers?: number): Promise
     idleTimeout: 5000,
   });
 
-  if (shouldLogToConsole()) {
-    console.log(`Parsing ${files.length} files using ${workerCount} worker threads...`);
-  }
+  const progressBar = createProgressBar(files.length);
+  let completed = 0;
 
-  // Submit all parsing tasks
-  const tasks: Promise<ParseResult>[] = files.map((filePath) =>
-    piscina.run({ filePath } as ParseTask)
+  // Submit all parsing tasks with progress tracking
+  const tasks: Promise<{ result: ParseResult; index: number }>[] = files.map((filePath, index) =>
+    piscina.run({ filePath } as ParseTask).then((result: ParseResult) => {
+      completed++;
+      progressBar?.update(completed);
+      return { result, index };
+    })
   );
 
   // Wait for all tasks to complete
-  const results = await Promise.all(tasks);
+  const taskResults = await Promise.all(tasks);
+  if (progressBar?.succeed) {
+    progressBar.succeed();
+  } else {
+    progressBar?.stop();
+  }
 
-  // Collect successful results
+  // Collect successful results (maintain order)
   const parsedFiles: ParsedFile[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
+  const errors: { file: string; error: string }[] = [];
+
+  for (const { result, index } of taskResults) {
     if (result.success && result.data) {
       parsedFiles.push(result.data);
-    } else if (shouldLogToConsole()) {
-      console.warn(`Warning: Could not parse ${files[i]}: ${result.error}`);
+    } else {
+      errors.push({ file: files[index], error: result.error || 'Unknown error' });
     }
+  }
+
+  // Show errors after progress bar is done (if any)
+  if (shouldLogToConsole() && errors.length > 0 && errors.length <= 5) {
+    for (const { file, error } of errors) {
+      console.warn(`Warning: Could not parse ${file}: ${error}`);
+    }
+  } else if (shouldLogToConsole() && errors.length > 5) {
+    console.warn(`Warning: Could not parse ${errors.length} files`);
   }
 
   // Destroy the worker pool
