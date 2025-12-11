@@ -32,6 +32,61 @@ import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis } from './types';
 import { isHookIgnored, createAnalysis } from './utils';
 
+/** React HOCs that wrap component functions */
+const REACT_COMPONENT_WRAPPERS = new Set(['memo', 'forwardRef']);
+
+/**
+ * Extract the component function from a VariableDeclarator's init.
+ * Handles:
+ * - Direct: `const Comp = () => {}`
+ * - memo: `const Comp = memo(() => {})`
+ * - React.memo: `const Comp = React.memo(() => {})`
+ * - forwardRef: `const Comp = forwardRef(() => {})`
+ * - React.forwardRef: `const Comp = React.forwardRef(() => {})`
+ *
+ * Returns null if the init is not a component function.
+ */
+function getComponentFunctionPath(
+  varPath: NodePath<t.VariableDeclarator>
+): NodePath<t.ArrowFunctionExpression | t.FunctionExpression> | null {
+  const initPath = varPath.get('init');
+
+  // Direct arrow/function expression
+  if (initPath.isArrowFunctionExpression() || initPath.isFunctionExpression()) {
+    return initPath as NodePath<t.ArrowFunctionExpression | t.FunctionExpression>;
+  }
+
+  // Check for HOC wrapper: memo(() => {}), React.memo(() => {}), forwardRef(() => {}), etc.
+  if (initPath.isCallExpression()) {
+    const callee = initPath.node.callee;
+    let isWrapper = false;
+
+    // Check for `memo(...)` or `forwardRef(...)`
+    if (t.isIdentifier(callee) && REACT_COMPONENT_WRAPPERS.has(callee.name)) {
+      isWrapper = true;
+    }
+    // Check for `React.memo(...)` or `React.forwardRef(...)`
+    else if (
+      t.isMemberExpression(callee) &&
+      t.isIdentifier(callee.object) &&
+      callee.object.name === 'React' &&
+      t.isIdentifier(callee.property) &&
+      REACT_COMPONENT_WRAPPERS.has(callee.property.name)
+    ) {
+      isWrapper = true;
+    }
+
+    if (isWrapper && initPath.node.arguments[0]) {
+      const firstArgPath = initPath.get('arguments.0') as NodePath;
+      if (firstArgPath.isArrowFunctionExpression() || firstArgPath.isFunctionExpression()) {
+        return firstArgPath as NodePath<t.ArrowFunctionExpression | t.FunctionExpression>;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Detect setState calls during render phase (outside hooks, event handlers, callbacks).
  * This is a guaranteed infinite loop pattern.
@@ -66,18 +121,15 @@ export function detectSetStateDuringRender(
     },
 
     // Arrow function components: const MyComponent = () => { ... }
+    // Also handles memo()/React.memo()/forwardRef()/React.forwardRef() wrappers
     VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
       if (!t.isIdentifier(varPath.node.id)) return;
       const varName = varPath.node.id.name;
       if (!/^[A-Z]/.test(varName)) return; // Not a component
 
-      const init = varPath.node.init;
-      if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+      const funcPath = getComponentFunctionPath(varPath);
+      if (!funcPath) return;
 
-      // Get the path to the arrow/function expression
-      const funcPath = varPath.get('init') as NodePath<
-        t.ArrowFunctionExpression | t.FunctionExpression
-      >;
       checkComponentBodyForSetState(
         funcPath,
         setterNames,
@@ -330,18 +382,15 @@ export function detectRefMutationDuringRender(
     },
 
     // Arrow function components: const MyComponent = () => { ... }
+    // Also handles memo()/React.memo()/forwardRef()/React.forwardRef() wrappers
     VariableDeclarator(varPath: NodePath<t.VariableDeclarator>) {
       if (!t.isIdentifier(varPath.node.id)) return;
       const varName = varPath.node.id.name;
       if (!/^[A-Z]/.test(varName)) return; // Not a component
 
-      const init = varPath.node.init;
-      if (!t.isArrowFunctionExpression(init) && !t.isFunctionExpression(init)) return;
+      const funcPath = getComponentFunctionPath(varPath);
+      if (!funcPath) return;
 
-      // Get the path to the arrow/function expression
-      const funcPath = varPath.get('init') as NodePath<
-        t.ArrowFunctionExpression | t.FunctionExpression
-      >;
       checkComponentBodyForRefMutation(
         funcPath,
         refVars,
