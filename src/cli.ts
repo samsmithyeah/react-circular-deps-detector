@@ -13,6 +13,11 @@ import { detectCircularDependencies, DetectionResults, CircularDependency } from
 import { CrossFileCycle } from './module-graph';
 import { HookAnalysis } from './orchestrator';
 
+// Read version from package.json
+const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+const VERSION: string = packageJson.version;
+
 // Custom gradients for different states
 const successGradient = gradient(['#00ff88', '#00d4ff']);
 const errorGradient = gradient(['#ff6b6b', '#ff8e53']);
@@ -347,7 +352,7 @@ function generateSarifReport(results: DetectionResults): SarifReport {
         tool: {
           driver: {
             name: 'react-loop-detector',
-            version: '1.0.0',
+            version: VERSION,
             informationUri: 'https://github.com/samsmithyeah/react-loop-detector',
             rules,
           },
@@ -399,7 +404,7 @@ program
   .description(
     'Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.'
   )
-  .version('1.0.0')
+  .version(VERSION)
   .argument('<path>', 'Path to React project or file to analyze')
   .option('-p, --pattern <pattern>', 'Glob pattern for files to analyze', '**/*.{js,jsx,ts,tsx}')
   .option('-i, --ignore <patterns...>', 'Patterns to ignore', [
@@ -547,7 +552,7 @@ program
         // Enhanced JSON output with metadata
         const jsonOutput = {
           meta: {
-            version: '1.0.0',
+            version: VERSION,
             durationMs: results.summary.durationMs,
             timestamp: new Date().toISOString(),
           },
@@ -559,7 +564,7 @@ program
         console.log(JSON.stringify(sarifReport, null, 2));
       } else if (!options.quiet || hasIssues) {
         // Show output if not quiet mode, OR if there are issues to report
-        formatResults(results, options.compact, options.debug, options.quiet);
+        formatResults(results, options.compact, options.debug);
       }
 
       // Exit with error for critical issues
@@ -838,12 +843,7 @@ function createErrorSummary(
   return [top, empty, titleLine, partsLineBox, statsLineBox, empty, bottom].join('\n');
 }
 
-function formatResults(
-  results: DetectionResults,
-  compact?: boolean,
-  debug?: boolean,
-  _quiet?: boolean
-) {
+function formatResults(results: DetectionResults, compact?: boolean, debug?: boolean) {
   const { circularDependencies, crossFileCycles, intelligentHooksAnalysis, summary } = results;
 
   // Separate by severity type (exclude safe-pattern from counts)
