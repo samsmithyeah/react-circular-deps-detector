@@ -24,7 +24,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { isSetterName, STATE_HOOKS, findSetterCallsInBody } from '../utils';
+import { isSetterName, STATE_HOOKS, findSetterCallsInBody, isNodeRldIgnored } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -117,6 +117,11 @@ export default createRule<[Options], MessageIds>({
 
       const callback = node.arguments[0];
       if (callback.type !== 'ArrowFunctionExpression' && callback.type !== 'FunctionExpression') {
+        return;
+      }
+
+      // Check for rld-ignore comments
+      if (isNodeRldIgnored(context.sourceCode, node)) {
         return;
       }
 

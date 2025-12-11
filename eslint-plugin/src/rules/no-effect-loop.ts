@@ -32,6 +32,7 @@ import {
   STATE_HOOKS,
   EFFECT_HOOKS,
   findSetterCallsWithInfo,
+  isNodeRldIgnored,
 } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
@@ -223,6 +224,11 @@ export default createRule<[Options], MessageIds>({
 
         // Check if it's guarded
         if (options.detectGuards && isGuarded(setterNode)) {
+          continue;
+        }
+
+        // Check for rld-ignore comments
+        if (isNodeRldIgnored(context.sourceCode, setterNode)) {
           continue;
         }
 

@@ -2,7 +2,7 @@
  * Shared utilities for ESLint rules
  */
 
-import type { TSESTree } from '@typescript-eslint/utils';
+import type { TSESTree, TSESLint } from '@typescript-eslint/utils';
 
 /**
  * React hooks that create state
@@ -290,4 +290,44 @@ export function findSetterCallsInBody(
 ): string[] {
   const result = findSetterCallsWithInfo(body, (name) => (isSetterFn(name) ? name : null));
   return result.map((info) => info.setter);
+}
+
+/**
+ * Check if a node should be ignored based on rld-ignore comments.
+ * Supports:
+ * - // rld-ignore (on same line)
+ * - // rld-ignore-next-line (on previous line)
+ * - Block comments with rld-ignore (inline or on same line)
+ *
+ * This provides unified ignore comment support between the CLI/VS Code extension
+ * and the ESLint plugin.
+ *
+ * @param sourceCode - The ESLint source code object
+ * @param node - The AST node to check
+ * @returns true if the node should be ignored
+ */
+export function isNodeRldIgnored(sourceCode: TSESLint.SourceCode, node: TSESTree.Node): boolean {
+  const nodeLine = node.loc.start.line;
+  const lines = sourceCode.getLines();
+
+  // Check the node's line for inline ignore comment
+  if (nodeLine > 0 && nodeLine <= lines.length) {
+    const currentLine = lines[nodeLine - 1];
+    if (/\/\/\s*rld-ignore\b/.test(currentLine) || /\/\*\s*rld-ignore\s*\*\//.test(currentLine)) {
+      return true;
+    }
+  }
+
+  // Check the previous line for rld-ignore-next-line
+  if (nodeLine > 1 && nodeLine <= lines.length) {
+    const previousLine = lines[nodeLine - 2];
+    if (
+      /\/\/\s*rld-ignore-next-line\b/.test(previousLine) ||
+      /\/\*\s*rld-ignore-next-line\s*\*\//.test(previousLine)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }

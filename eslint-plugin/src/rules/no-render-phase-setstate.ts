@@ -25,7 +25,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { isComponentName, isSetterName, STATE_HOOKS } from '../utils';
+import { isComponentName, isSetterName, STATE_HOOKS, isNodeRldIgnored } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -242,6 +242,11 @@ export default createRule<[Options], MessageIds>({
         }
 
         if (isSetterCall(node)) {
+          // Check for rld-ignore comments
+          if (isNodeRldIgnored(context.sourceCode, node)) {
+            return;
+          }
+
           const setter = getSetterName(node);
           if (setter) {
             context.report({

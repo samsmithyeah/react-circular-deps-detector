@@ -30,7 +30,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { EFFECT_HOOKS, isStableFunctionCall } from '../utils';
+import { EFFECT_HOOKS, isStableFunctionCall, isNodeRldIgnored } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -97,6 +97,11 @@ export default createRule<[Options], MessageIds>({
     function analyzeDepsArray(node: TSESTree.ArrayExpression) {
       for (const element of node.elements) {
         if (!element) continue;
+
+        // Check for rld-ignore comments
+        if (isNodeRldIgnored(context.sourceCode, element)) {
+          continue;
+        }
 
         // Inline object literal
         if (element.type === 'ObjectExpression') {

@@ -31,7 +31,7 @@
  */
 
 import { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { isStableFunctionCall } from '../utils';
+import { isStableFunctionCall, isNodeRldIgnored } from '../utils';
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
@@ -195,6 +195,9 @@ export default createRule<[], MessageIds>({
 
       // Skip if it's just an empty expression
       if (expression.type === 'JSXEmptyExpression') return;
+
+      // Check for rld-ignore comments
+      if (isNodeRldIgnored(context.sourceCode, expression)) return;
 
       // Inline object literal: value={{ foo: 'bar' }}
       if (expression.type === 'ObjectExpression') {
