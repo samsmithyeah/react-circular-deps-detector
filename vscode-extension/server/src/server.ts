@@ -20,12 +20,17 @@ import {
   analyzeHooks,
   createPathResolver,
   getPersistentTypeChecker,
+  getPersistentTypeCheckerPool,
   disposeAllPersistentTypeCheckers,
+  disposeAllPersistentTypeCheckerPools,
+  createTsconfigManager,
   type DetectionResults,
   type RcdConfig,
   type ParsedFile,
   type PathResolver,
   type TypeChecker,
+  type TypeCheckerPool,
+  type TsconfigManager,
 } from 'react-loop-detector';
 import {
   mapAnalysisToDiagnostics,
@@ -75,7 +80,18 @@ const incrementalCache = new IncrementalCache();
 let pathResolver: PathResolver | null = null;
 
 // Persistent type checker for strict mode (lazy-loaded, persists across analyses)
+// For single-project workspaces
 let persistentTypeChecker: TypeChecker | null = null;
+
+// Persistent type checker pool for monorepo workspaces
+// Manages multiple TypeChecker instances (one per tsconfig)
+let persistentTypeCheckerPool: TypeCheckerPool | null = null;
+
+// Tsconfig manager for monorepo detection
+let tsconfigManager: TsconfigManager | null = null;
+
+// Whether the workspace is a monorepo (detected once at startup)
+let isMonorepoWorkspace = false;
 
 // Initialize
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -117,6 +133,15 @@ connection.onInitialized(async () => {
     pathResolver = createPathResolver({ projectRoot: workspaceRoot });
     incrementalCache.setPathResolver(pathResolver);
     connection.console.log('Path resolver initialized for workspace');
+
+    // Detect monorepo structure
+    tsconfigManager = createTsconfigManager(workspaceRoot);
+    const monorepoInfo = tsconfigManager.detectMonorepo();
+    isMonorepoWorkspace = monorepoInfo.type !== null;
+
+    if (isMonorepoWorkspace) {
+      connection.console.log(`Monorepo detected: ${monorepoInfo.type}`);
+    }
   }
 
   // Load rld config file
@@ -165,6 +190,7 @@ connection.onShutdown(() => {
   connection.console.log('Server shutting down, disposing resources...');
   disposeTypeChecker();
   disposeAllPersistentTypeCheckers();
+  disposeAllPersistentTypeCheckerPools();
   incrementalCache.clear();
 });
 
@@ -334,12 +360,37 @@ async function loadRldConfig(): Promise<void> {
 }
 
 /**
+ * Get the TypeCheckerPool for monorepo workspaces.
+ * Each file will get its own TypeChecker based on its governing tsconfig.
+ */
+function getTypeCheckerPool(): TypeCheckerPool | null {
+  if (!globalSettings.strictMode || !workspaceRoot || !isMonorepoWorkspace) {
+    return null;
+  }
+
+  if (!persistentTypeCheckerPool) {
+    persistentTypeCheckerPool = getPersistentTypeCheckerPool(workspaceRoot);
+    connection.console.log(
+      'TypeScript type checker pool ready for monorepo (will initialize checkers on demand)'
+    );
+  }
+
+  return persistentTypeCheckerPool;
+}
+
+/**
  * Get or create the persistent TypeChecker for strict mode analysis.
+ * For single-project workspaces only.
  * The TypeChecker uses true lazy loading - it only initializes the TypeScript
  * Language Service when a type query is actually made, not when constructed.
  */
 function getTypeChecker(): TypeChecker | null {
   if (!globalSettings.strictMode || !workspaceRoot) {
+    return null;
+  }
+
+  // For monorepos, return null here - use getTypeCheckerPool() instead
+  if (isMonorepoWorkspace) {
     return null;
   }
 
@@ -368,22 +419,29 @@ function getTypeChecker(): TypeChecker | null {
 }
 
 /**
- * Update a file in the persistent TypeChecker (for incremental updates)
+ * Update a file in the persistent TypeChecker/Pool (for incremental updates)
  */
 function updateTypeCheckerFile(filePath: string, content: string): void {
-  if (persistentTypeChecker) {
+  if (isMonorepoWorkspace && persistentTypeCheckerPool) {
+    persistentTypeCheckerPool.updateFile(filePath, content);
+  } else if (persistentTypeChecker) {
     persistentTypeChecker.updateFile(filePath, content);
   }
 }
 
 /**
- * Dispose the persistent TypeChecker (e.g., when strict mode is disabled)
+ * Dispose the persistent TypeChecker/Pool (e.g., when strict mode is disabled)
  */
 function disposeTypeChecker(): void {
   if (persistentTypeChecker) {
     persistentTypeChecker.dispose();
     persistentTypeChecker = null;
     connection.console.log('TypeScript type checker disposed');
+  }
+  if (persistentTypeCheckerPool) {
+    persistentTypeCheckerPool.dispose();
+    persistentTypeCheckerPool = null;
+    connection.console.log('TypeScript type checker pool disposed');
   }
 }
 
@@ -433,14 +491,16 @@ async function runSingleFileAnalysis(uri: string, content: string): Promise<void
     updateTypeCheckerFile(filePath, content);
 
     // Run single-file analysis (no cross-file detection)
-    // Pass the persistent TypeChecker if strict mode is enabled
+    // Pass the persistent TypeChecker/Pool if strict mode is enabled
     const analysis = analyzeHooks([parsed], {
       stableHooks: rldConfig?.stableHooks,
       unstableHooks: rldConfig?.unstableHooks,
       customFunctions: rldConfig?.customFunctions,
       strictMode: globalSettings.strictMode,
       projectRoot: workspaceRoot || undefined,
-      typeChecker: getTypeChecker(), // Use persistent type checker
+      // Use pool for monorepos, single checker for single-project workspaces
+      typeChecker: isMonorepoWorkspace ? undefined : getTypeChecker(),
+      typeCheckerPool: isMonorepoWorkspace ? getTypeCheckerPool() : undefined,
     });
 
     // Update analysis cache
