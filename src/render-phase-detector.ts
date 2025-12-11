@@ -276,52 +276,22 @@ function extractStateVariableNames(ast: t.Node): Set<string> {
 
 /**
  * Check if an expression references any state variable.
+ * Uses @babel/traverse for robust handling of all expression types.
  */
 function expressionReferencesState(node: t.Node, stateNames: Set<string>): boolean {
   let referencesState = false;
+  if (!node) return false;
 
-  // Simple traversal to check if any identifier matches a state variable
-  const checkNode = (n: t.Node): void => {
-    if (t.isIdentifier(n) && stateNames.has(n.name)) {
-      referencesState = true;
-    } else if (t.isMemberExpression(n)) {
-      checkNode(n.object);
-      if (!n.computed) {
-        // Don't check property name for non-computed access
-      } else {
-        checkNode(n.property);
+  traverse(node, {
+    noScope: true, // Don't build scope info - we're only traversing a sub-node
+    Identifier(path) {
+      if (stateNames.has(path.node.name) && path.isReferencedIdentifier()) {
+        referencesState = true;
+        path.stop(); // Stop traversal once a reference is found
       }
-    } else if (t.isBinaryExpression(n) || t.isLogicalExpression(n)) {
-      checkNode(n.left);
-      checkNode(n.right);
-    } else if (t.isConditionalExpression(n)) {
-      checkNode(n.test);
-      checkNode(n.consequent);
-      checkNode(n.alternate);
-    } else if (t.isCallExpression(n)) {
-      n.arguments.forEach((arg) => {
-        if (t.isExpression(arg) || t.isSpreadElement(arg)) {
-          checkNode(arg);
-        }
-      });
-    } else if (t.isObjectExpression(n)) {
-      n.properties.forEach((prop) => {
-        if (t.isObjectProperty(prop) && t.isExpression(prop.value)) {
-          checkNode(prop.value);
-        }
-      });
-    } else if (t.isArrayExpression(n)) {
-      n.elements.forEach((el) => {
-        if (el && t.isExpression(el)) {
-          checkNode(el);
-        }
-      });
-    } else if (t.isSpreadElement(n)) {
-      checkNode(n.argument);
-    }
-  };
+    },
+  });
 
-  checkNode(node);
   return referencesState;
 }
 
