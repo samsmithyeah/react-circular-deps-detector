@@ -28,7 +28,7 @@ describe('CLI Integration', () => {
     it('should show help when --help flag is used', () => {
       const output = execSync(`node ${cliPath} --help`, { encoding: 'utf8' });
 
-      expect(output).toContain('Detect circular import dependencies and React hooks');
+      expect(output).toContain('Static analysis for React Hooks');
       expect(output).toContain('--pattern');
       expect(output).toContain('--ignore');
       expect(output).toContain('--json');

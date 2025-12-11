@@ -8,6 +8,7 @@ import chokidar from 'chokidar';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import { codeFrameColumns } from '@babel/code-frame';
+import stripAnsi from 'strip-ansi';
 import { detectCircularDependencies, DetectionResults, CircularDependency } from './detector';
 import { CrossFileCycle } from './module-graph';
 import { HookAnalysis } from './orchestrator';
@@ -40,34 +41,6 @@ function centerPlain(text: string, width: number): string {
   const left = Math.floor((width - text.length) / 2);
   const right = width - text.length - left;
   return ' '.repeat(left) + text + ' '.repeat(right);
-}
-
-function stripAnsi(text: string): string {
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const code = text.charCodeAt(i);
-    if (code === 27) {
-      // ESC
-      const next = text[i + 1];
-      if (next === '[') {
-        i += 2;
-        // Skip CSI parameters/intermediates until final byte.
-        while (i < text.length) {
-          const c = text.charCodeAt(i);
-          if (c >= 64 && c <= 126) {
-            i += 1;
-            break;
-          }
-          i += 1;
-        }
-        continue;
-      }
-    }
-    out += text[i];
-    i += 1;
-  }
-  return out;
 }
 
 function visibleLength(text: string): number {
