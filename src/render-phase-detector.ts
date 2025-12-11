@@ -316,6 +316,8 @@ function expressionReferencesState(node: t.Node, stateNames: Set<string>): boole
           checkNode(el);
         }
       });
+    } else if (t.isSpreadElement(n)) {
+      checkNode(n.argument);
     }
   };
 
