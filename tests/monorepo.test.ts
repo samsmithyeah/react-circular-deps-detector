@@ -172,6 +172,7 @@ describe('TypeCheckerPool', () => {
 
       // Now we should have at least one checker
       // (could be more if the file requires loading other tsconfigs)
+      expect(pool.getLoadedCheckerCount()).toBeGreaterThanOrEqual(1);
     });
   });
 

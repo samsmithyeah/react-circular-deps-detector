@@ -16,6 +16,7 @@ import * as ts from 'typescript';
 import * as path from 'path';
 import * as fs from 'fs';
 import { glob } from 'glob';
+import * as yaml from 'js-yaml';
 
 export interface TsconfigInfo {
   /** Absolute path to the tsconfig.json file */
@@ -288,16 +289,9 @@ export class TsconfigManager {
       if (fs.existsSync(pnpmPath)) {
         try {
           const content = fs.readFileSync(pnpmPath, 'utf-8');
-          // Simple YAML parsing for packages field
-          const packagesMatch = content.match(/packages:\s*\n((?:\s+-\s+['"]?[^\n]+['"]?\n?)+)/);
-          if (packagesMatch) {
-            const patterns = packagesMatch[1]
-              .split('\n')
-              .map((line) => line.replace(/^\s*-\s*['"]?|['"]?\s*$/g, '').trim())
-              .filter((p) => p.length > 0);
-            if (patterns.length > 0) {
-              return patterns;
-            }
+          const pnpmConfig = yaml.load(content) as { packages?: string[] } | null;
+          if (pnpmConfig && Array.isArray(pnpmConfig.packages) && pnpmConfig.packages.length > 0) {
+            return pnpmConfig.packages;
           }
         } catch {
           // Fall through to defaults

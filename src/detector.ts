@@ -293,8 +293,8 @@ export async function detectCircularDependencies(
     strictMode: strictModeDetection.enabled,
     tsconfigPath: strictModeDetection.tsconfigPath || config.tsconfigPath,
     projectRoot: targetPath,
-    // Pass the pool for monorepos, or undefined for single-project mode
-    typeCheckerPool: typeCheckerPool ?? undefined,
+    // Pass the pool for monorepos, or null for single-project mode
+    typeCheckerPool,
   });
 
   // Filter results based on config

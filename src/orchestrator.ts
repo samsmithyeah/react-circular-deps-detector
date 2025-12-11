@@ -233,9 +233,7 @@ function analyzeFileIntelligently(
     // Get the appropriate type checker for this file
     // If we have a pool (monorepo), get the checker for this specific file's tsconfig
     // Otherwise, use the single type checker (single project mode)
-    const fileTypeChecker = typeCheckerPool
-      ? typeCheckerPool.getCheckerForFile(file.file)
-      : typeChecker;
+    const fileTypeChecker = typeCheckerPool?.getCheckerForFile(file.file) ?? typeChecker;
 
     // Extract unstable local variables (objects, arrays, functions created in component body)
     // Pass file path for type-aware stability checking in strict mode
