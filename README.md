@@ -1,11 +1,11 @@
 # React Loop Detector
 
-A static analysis tool to detect circular dependencies and infinite re-render risks in React applications. Analyzes both import cycles between files and React hooks dependency arrays to identify potential infinite loops that can crash your app or cause performance issues.
+Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies. Analyzes both import cycles between files and React hooks dependency arrays to identify issues that can crash your app or cause performance problems.
 
 ## Features
 
 - **Import Cycle Detection**: Finds circular imports between files
-- **React Hooks Analysis**: Detects infinite re-render risks in `useEffect`, `useCallback`, `useMemo`, `useLayoutEffect`, and `useImperativeHandle`
+- **React Hooks Analysis**: Detects infinite loops and unstable dependencies in `useEffect`, `useCallback`, `useMemo`, `useLayoutEffect`, and `useImperativeHandle`
 - **Cross-File Cycle Detection**: Identifies import cycles spanning multiple files, including context and function-call based cycles
 - **TypeScript Strict Mode**: Auto-enabled for TypeScript projects - uses the TypeScript compiler for accurate type-based stability detection
 - **Library Presets**: Built-in presets for Zustand, React Query, React Redux, and more - automatically detects libraries from package.json

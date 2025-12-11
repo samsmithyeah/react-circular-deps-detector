@@ -5,10 +5,104 @@ import * as path from 'path';
 import * as fs from 'fs';
 import chalk from 'chalk';
 import chokidar from 'chokidar';
+import gradient from 'gradient-string';
+import figlet from 'figlet';
 import { codeFrameColumns } from '@babel/code-frame';
 import { detectCircularDependencies, DetectionResults, CircularDependency } from './detector';
 import { CrossFileCycle } from './module-graph';
 import { HookAnalysis } from './orchestrator';
+
+// Custom gradients for different states
+const successGradient = gradient(['#00ff88', '#00d4ff']);
+const errorGradient = gradient(['#ff6b6b', '#ff8e53']);
+const infoGradient = gradient(['#667eea', '#764ba2']);
+const warningGradient = gradient(['#facc15', '#fb923c']);
+
+type GradientFn = ((text: string) => string) & {
+  multiline?: (text: string) => string;
+};
+
+function applyGradientSafe(grad: GradientFn, text: string, multiline = false): string {
+  if (chalk.level === 0) return text;
+  if (multiline && typeof grad.multiline === 'function') {
+    return grad.multiline(text);
+  }
+  return grad(text);
+}
+
+function getTerminalWidth(maxWidth: number): number {
+  const columns = process.stdout.columns ?? maxWidth;
+  return Math.max(40, Math.min(maxWidth, columns - 2));
+}
+
+function centerPlain(text: string, width: number): string {
+  if (text.length >= width) return text.slice(0, width);
+  const left = Math.floor((width - text.length) / 2);
+  const right = width - text.length - left;
+  return ' '.repeat(left) + text + ' '.repeat(right);
+}
+
+function stripAnsi(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const code = text.charCodeAt(i);
+    if (code === 27) {
+      // ESC
+      const next = text[i + 1];
+      if (next === '[') {
+        i += 2;
+        // Skip CSI parameters/intermediates until final byte.
+        while (i < text.length) {
+          const c = text.charCodeAt(i);
+          if (c >= 64 && c <= 126) {
+            i += 1;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+function visibleLength(text: string): number {
+  return stripAnsi(text).length;
+}
+
+function centerAnsi(text: string, width: number): string {
+  const len = visibleLength(text);
+  if (len >= width) {
+    // Truncate safely by dropping ANSI when too long
+    return stripAnsi(text).slice(0, width);
+  }
+  const left = Math.floor((width - len) / 2);
+  const right = width - len - left;
+  return ' '.repeat(left) + text + ' '.repeat(right);
+}
+
+function printBanner(): void {
+  if (!process.stdout.isTTY || chalk.level === 0) return;
+
+  try {
+    const title = figlet.textSync('React Loop Detector', { font: 'Slant' });
+    console.log(applyGradientSafe(infoGradient, title, true));
+  } catch {
+    console.log(applyGradientSafe(infoGradient, 'React Loop Detector'));
+  }
+
+  const rule = '─'.repeat(Math.min(process.stdout.columns ?? 60, 60));
+  console.log(chalk.gray(rule));
+  console.log(
+    chalk.gray(
+      'Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.\n'
+    )
+  );
+}
 
 interface CliOptions {
   pattern: string;
@@ -329,7 +423,9 @@ const program = new Command();
 
 program
   .name('react-loop-detector')
-  .description('Detect circular import dependencies and React hooks infinite re-render risks')
+  .description(
+    'Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.'
+  )
   .version('1.0.0')
   .argument('<path>', 'Path to React project or file to analyze')
   .option('-p, --pattern <pattern>', 'Glob pattern for files to analyze', '**/*.{js,jsx,ts,tsx}')
@@ -389,16 +485,39 @@ program
 
       const shouldLog = !options.json && !options.sarif && !options.quiet;
       if (shouldLog) {
-        console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
-        console.log(chalk.gray(`Pattern: ${options.pattern}`));
-        if (options.since) {
-          console.log(
-            chalk.yellow(
-              `Changed files mode: Only analyzing files changed since '${options.since}'`
-            )
-          );
-          if (options.includeDependents) {
-            console.log(chalk.gray(`  Including files that import changed files`));
+        const isTTY = process.stdout.isTTY;
+        if (isTTY) {
+          printBanner();
+          console.log(infoGradient('Target'));
+          console.log(chalk.whiteBright(`  ${absolutePath}`));
+          console.log(chalk.gray(`  Pattern: ${options.pattern}`));
+          if (options.cache) {
+            console.log(chalk.gray('  Cache: enabled'));
+          }
+          if (options.parallel) {
+            console.log(chalk.gray(`  Parallel parsing: ${options.workers || 'auto'} workers`));
+          }
+          if (options.since) {
+            console.log(
+              chalk.yellow(
+                `  Changed files mode: since '${options.since}'${options.includeDependents ? ' (+ dependents)' : ''}`
+              )
+            );
+          }
+          console.log();
+        } else {
+          // Preserve clean, stable output for non-TTY/CI
+          console.log(chalk.blue(`Analyzing React hooks in: ${absolutePath}`));
+          console.log(chalk.gray(`Pattern: ${options.pattern}`));
+          if (options.since) {
+            console.log(
+              chalk.yellow(
+                `Changed files mode: Only analyzing files changed since '${options.since}'`
+              )
+            );
+            if (options.includeDependents) {
+              console.log(chalk.gray(`  Including files that import changed files`));
+            }
           }
         }
       }
@@ -448,7 +567,8 @@ program
       const confirmedLoops = results.intelligentHooksAnalysis.filter(
         (issue) => issue.type === 'confirmed-infinite-loop'
       ).length;
-      const hasIssues = criticalIssues > 0 || confirmedLoops > 0 || results.intelligentHooksAnalysis.length > 0;
+      const hasIssues =
+        criticalIssues > 0 || confirmedLoops > 0 || results.intelligentHooksAnalysis.length > 0;
 
       if (options.json) {
         // Enhanced JSON output with metadata
@@ -648,7 +768,109 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function formatResults(results: DetectionResults, compact?: boolean, debug?: boolean, quiet?: boolean) {
+/**
+ * Create a visually appealing success message
+ */
+function createSuccessBox(files: number, hooks: number, duration: string): string {
+  const isTTY = process.stdout.isTTY;
+
+  if (!isTTY) {
+    return `✓ All clear! No issues found\n  ${files} files • ${hooks} hooks • ${duration}`;
+  }
+
+  const innerWidth = getTerminalWidth(68);
+  const border = chalk.greenBright;
+
+  const top = border(`╭${'─'.repeat(innerWidth)}╮`);
+  const bottom = border(`╰${'─'.repeat(innerWidth)}╯`);
+  const empty = border(`│${' '.repeat(innerWidth)}│`);
+
+  const headerPlain = '✓ All clear! No issues found';
+  const statsPlain = `${files} files • ${hooks} hooks • ${duration}`;
+
+  const headerCentered = centerPlain(headerPlain, innerWidth);
+  const statsCentered = centerPlain(statsPlain, innerWidth);
+
+  const header = applyGradientSafe(successGradient, headerCentered);
+  const stats = chalk.gray(statsCentered);
+
+  const headerLine = border('│') + header + border('│');
+  const statsLine = border('│') + stats + border('│');
+
+  return [top, empty, headerLine, statsLine, empty, bottom].join('\n');
+}
+
+/**
+ * Create a visually appealing error summary
+ */
+function createErrorSummary(
+  criticalCount: number,
+  warningCount: number,
+  perfCount: number,
+  files: number,
+  hooks: number,
+  duration: string
+): string {
+  const isTTY = process.stdout.isTTY;
+
+  const total = criticalCount + warningCount + perfCount;
+  const parts: string[] = [];
+
+  if (criticalCount > 0) {
+    parts.push(chalk.red.bold(`${criticalCount} critical`));
+  }
+  if (warningCount > 0) {
+    parts.push(chalk.yellow(`${warningCount} warning${warningCount > 1 ? 's' : ''}`));
+  }
+  if (perfCount > 0) {
+    parts.push(chalk.cyan(`${perfCount} perf`));
+  }
+
+  if (!isTTY) {
+    const symbol = criticalCount > 0 ? '✗' : '!';
+    return `${symbol} ${total} issue(s) found\n  ${parts.join(' • ')}\n  ${files} files • ${hooks} hooks • ${duration}`;
+  }
+
+  const innerWidth = getTerminalWidth(74);
+  const borderColor = criticalCount > 0 ? chalk.redBright : chalk.yellowBright;
+
+  const top = borderColor(`╭${'─'.repeat(innerWidth)}╮`);
+  const bottom = borderColor(`╰${'─'.repeat(innerWidth)}╯`);
+  const empty = borderColor(`│${' '.repeat(innerWidth)}│`);
+
+  const titlePlain =
+    criticalCount > 0
+      ? `✗ ${total} issue${total > 1 ? 's' : ''} found`
+      : `! ${total} issue${total > 1 ? 's' : ''} found`;
+
+  const statsPlain = `${files} files • ${hooks} hooks • ${duration}`;
+
+  const titleCentered = centerPlain(titlePlain, innerWidth);
+  const statsCentered = centerPlain(statsPlain, innerWidth);
+
+  const title =
+    criticalCount > 0
+      ? applyGradientSafe(errorGradient, titleCentered)
+      : applyGradientSafe(warningGradient, titleCentered);
+
+  const partsColored = parts.join(chalk.gray(' • '));
+  const partsCenteredAnsi = centerAnsi(partsColored, innerWidth);
+  const partsLine = partsCenteredAnsi;
+  const statsLine = chalk.gray(statsCentered);
+
+  const titleLine = borderColor('│') + title + borderColor('│');
+  const partsLineBox = borderColor('│') + partsLine + borderColor('│');
+  const statsLineBox = borderColor('│') + statsLine + borderColor('│');
+
+  return [top, empty, titleLine, partsLineBox, statsLineBox, empty, bottom].join('\n');
+}
+
+function formatResults(
+  results: DetectionResults,
+  compact?: boolean,
+  debug?: boolean,
+  _quiet?: boolean
+) {
   const { circularDependencies, crossFileCycles, intelligentHooksAnalysis, summary } = results;
 
   // Separate by severity type (exclude safe-pattern from counts)
@@ -664,7 +886,6 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
   // Only count actual issues, not safe-pattern entries
   const hooksIssueCount = confirmedIssues.length + potentialIssues.length;
   const importCyclesCount = circularDependencies.length + crossFileCycles.length;
-  const totalCriticalIssues = importCyclesCount + confirmedIssues.length;
   const totalIssues = importCyclesCount + hooksIssueCount;
   const hasIssues = totalIssues > 0;
 
@@ -697,7 +918,9 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
 
     // Brief summary with timing
     if (totalIssues > 0) {
-      console.log(chalk.gray(`\n${totalIssues} issue(s) found in ${formatDuration(summary.durationMs)}`));
+      console.log(
+        chalk.gray(`\n${totalIssues} issue(s) found in ${formatDuration(summary.durationMs)}`)
+      );
     } else {
       console.log(chalk.green(`\n✓ No issues found in ${formatDuration(summary.durationMs)}`));
     }
@@ -707,13 +930,15 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
   // VERBOSE MODE (default): Summary-first format
   console.log();
 
+  const duration = formatDuration(summary.durationMs);
+  const criticalCount = confirmedIssues.length + importCyclesCount;
+
   // ═══════════════════════════════════════════════════════════════
   // SUMMARY HEADER (shown first - the verdict)
   // ═══════════════════════════════════════════════════════════════
   if (!hasIssues) {
-    // 🎉 Success celebration
-    console.log(chalk.green.bold('✓ All clear! No issues found'));
-    console.log(chalk.gray(`  ${summary.filesAnalyzed} files • ${summary.hooksAnalyzed} hooks • ${formatDuration(summary.durationMs)}`));
+    // 🎉 Success celebration with visual box
+    console.log(createSuccessBox(summary.filesAnalyzed, summary.hooksAnalyzed, duration));
 
     // Show filtered count if any were hidden
     if (summary.filteredCount > 0) {
@@ -724,36 +949,25 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
     return;
   }
 
-  // There are issues - show summary box
-  if (totalCriticalIssues > 0) {
-    console.log(chalk.red.bold(`✗ ${totalCriticalIssues} critical issue(s) found`));
-  } else {
-    console.log(chalk.yellow.bold(`⚠ ${totalIssues} issue(s) found`));
-  }
-
-  // Show breakdown
-  const parts: string[] = [];
-  if (confirmedIssues.length > 0) {
-    parts.push(chalk.red(`${confirmedIssues.length} infinite loop${confirmedIssues.length > 1 ? 's' : ''}`));
-  }
-  if (importCyclesCount > 0) {
-    parts.push(chalk.red(`${importCyclesCount} import cycle${importCyclesCount > 1 ? 's' : ''}`));
-  }
-  if (warningIssues.length > 0) {
-    parts.push(chalk.yellow(`${warningIssues.length} warning${warningIssues.length > 1 ? 's' : ''}`));
-  }
-  if (performanceIssues.length > 0) {
-    parts.push(chalk.cyan(`${performanceIssues.length} perf issue${performanceIssues.length > 1 ? 's' : ''}`));
-  }
-  if (parts.length > 0) {
-    console.log(chalk.gray(`  ${parts.join(' • ')}`));
-  }
-
-  console.log(chalk.gray(`  ${summary.filesAnalyzed} files • ${summary.hooksAnalyzed} hooks • ${formatDuration(summary.durationMs)}`));
+  // There are issues - show error summary box
+  console.log(
+    createErrorSummary(
+      criticalCount,
+      warningIssues.length,
+      performanceIssues.length,
+      summary.filesAnalyzed,
+      summary.hooksAnalyzed,
+      duration
+    )
+  );
 
   // Show filtered count if any were hidden
   if (summary.filteredCount > 0) {
-    console.log(chalk.gray(`  ${summary.filteredCount} additional issue(s) hidden by severity/confidence filters`));
+    console.log(
+      chalk.gray(
+        `  ${summary.filteredCount} additional issue(s) hidden by severity/confidence filters`
+      )
+    );
   }
 
   console.log();
@@ -762,9 +976,15 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
   // DETAILED ISSUES (shown after summary)
   // ═══════════════════════════════════════════════════════════════
 
+  const isTTY = process.stdout.isTTY;
+
   // Show import/file-level circular dependencies
   if (circularDependencies.length > 0) {
-    console.log(chalk.red(`Import circular dependencies:\n`));
+    const headerText = `━━━ Import Cycles (${circularDependencies.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Import circular dependencies:';
+    console.log(header + '\n');
 
     circularDependencies.forEach((dep: CircularDependency, index: number) => {
       console.log(
@@ -778,7 +998,11 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
 
   // Show cross-file cycles
   if (crossFileCycles.length > 0) {
-    console.log(chalk.red(`Cross-file import cycles:\n`));
+    const headerText = `━━━ Cross-File Cycles (${crossFileCycles.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Cross-file import cycles:';
+    console.log(header + '\n');
 
     crossFileCycles.forEach((cycle: CrossFileCycle, index: number) => {
       console.log(chalk.yellow(`${index + 1}. Import cycle between files:`));
@@ -799,13 +1023,18 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
 
   // Show confirmed infinite loops (critical issues)
   if (confirmedIssues.length > 0) {
-    console.log(chalk.red(`Confirmed infinite loops:\n`));
+    const headerText = `━━━ 🔥 Infinite Loops (${confirmedIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.red.bold(applyGradientSafe(errorGradient, headerText))
+      : 'Confirmed infinite loops:';
+    console.log(header + '\n');
 
     confirmedIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
       console.log(
-        chalk.redBright(
-          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line}`
-        )
+        chalk.redBright(`${index + 1}. `) +
+          chalk.red(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
       );
       console.log();
       displayIssue(issue, debug);
@@ -814,14 +1043,20 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
 
   // Show warning issues
   if (warningIssues.length > 0) {
-    console.log(chalk.yellow(`Warnings to review:\n`));
+    const headerText = `━━━ ⚠️  Warnings (${warningIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.yellow.bold(applyGradientSafe(warningGradient, headerText))
+      : 'Warnings to review:';
+    console.log(header + '\n');
 
     warningIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
       console.log(
-        chalk.yellow(
-          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line} - ${issue.description}`
-        )
+        chalk.yellow(`${index + 1}. `) +
+          chalk.yellow(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
       );
+      console.log(chalk.gray(`   ${issue.description}`));
       console.log();
       displayIssue(issue, debug);
     });
@@ -829,14 +1064,20 @@ function formatResults(results: DetectionResults, compact?: boolean, debug?: boo
 
   // Show performance issues
   if (performanceIssues.length > 0) {
-    console.log(chalk.cyan(`Performance issues:\n`));
+    const headerText = `━━━ ⚡ Performance (${performanceIssues.length}) ━━━`;
+    const header = isTTY
+      ? chalk.cyan.bold(applyGradientSafe(infoGradient, headerText))
+      : 'Performance issues:';
+    console.log(header + '\n');
 
     performanceIssues.forEach((issue, index: number) => {
+      const fileRef = `${path.relative(process.cwd(), issue.file)}:${issue.line}`;
       console.log(
-        chalk.cyan(
-          `${index + 1}. [${issue.errorCode}] ${path.relative(process.cwd(), issue.file)}:${issue.line} - ${issue.description}`
-        )
+        chalk.cyan(`${index + 1}. `) +
+          chalk.cyan(`[${issue.errorCode}]`) +
+          chalk.white(` ${fileRef}`)
       );
+      console.log(chalk.gray(`   ${issue.description}`));
       console.log();
       displayIssue(issue, debug);
     });

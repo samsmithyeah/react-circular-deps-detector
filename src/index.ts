@@ -1,7 +1,7 @@
 /**
  * React Loop Detector
  *
- * A tool to detect circular dependencies and infinite re-render risks in React hooks.
+ * Static analysis for React Hooks: Detects infinite loops, circular imports, and unstable dependencies.
  *
  * @example
  * ```typescript

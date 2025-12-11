@@ -37,7 +37,7 @@ describe('CLI Hooks Output', () => {
 
         expect(output).toContain('Confirmed infinite loops:');
         expect(output).toContain('[RLD-200]');
-        expect(output).toContain('critical issue');
+        expect(output).toMatch(/\d+ critical/);
         expect(output).toContain('hooks-dependency-loop.tsx');
       }
     });
@@ -72,8 +72,7 @@ describe('CLI Hooks Output', () => {
         const output = execError.stdout || '';
 
         // Summary is now shown at the top with the verdict
-        expect(output).toMatch(/\d+ critical issue/);
-        expect(output).toMatch(/\d+ infinite loop/);
+        expect(output).toMatch(/\d+ critical/);
         expect(output).toContain('Confirmed infinite loops:');
       }
     });
@@ -204,7 +203,7 @@ describe('CLI Hooks Output', () => {
         const output = execError.stdout || '';
 
         // Should contain critical issue indicators
-        expect(output).toContain('critical issue');
+        expect(output).toMatch(/\d+ critical/);
         expect(output).toContain('Confirmed infinite loops:');
       }
     });
