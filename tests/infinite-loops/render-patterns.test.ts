@@ -222,6 +222,42 @@ describe('Render-time infinite loop patterns', () => {
       expect(renderStateIssues).toHaveLength(0);
     });
 
+    it('should NOT flag derived state inside nested if statements', async () => {
+      const testFile = path.join(tempDir, 'NestedIfDerivedState.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        // Valid pattern inside nested if statement
+        function List({ items, isEnabled }) {
+          const [prevItems, setPrevItems] = useState(items);
+
+          // The outer if doesn't involve state, but inner if is valid derived state
+          if (isEnabled) {
+            if (items !== prevItems) {
+              setPrevItems(items);
+            }
+          }
+
+          return <div>{prevItems}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const renderStateIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(renderStateIssues).toHaveLength(0);
+    });
+
     it('should NOT flag derived state with member expression (props.items)', async () => {
       const testFile = path.join(tempDir, 'MemberExpressionDerivedState.tsx');
       fs.writeFileSync(

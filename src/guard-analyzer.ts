@@ -173,6 +173,21 @@ export function analyzeCondition(
 }
 
 /**
+ * Check if a node is a falsy literal value (false, 0, '', null, undefined).
+ * Used to detect toggle guard patterns where setting a falsy value terminates the loop.
+ */
+function isFalsyLiteralNode(node: t.Node | null | undefined): boolean {
+  if (!node) return false;
+  return (
+    (node.type === 'BooleanLiteral' && node.value === false) ||
+    (node.type === 'NumericLiteral' && node.value === 0) ||
+    (node.type === 'StringLiteral' && node.value === '') ||
+    node.type === 'NullLiteral' ||
+    (node.type === 'Identifier' && node.name === 'undefined')
+  );
+}
+
+/**
  * Result of render-phase guard analysis.
  */
 export interface RenderPhaseGuardResult {
@@ -212,8 +227,12 @@ export function analyzeRenderPhaseGuard(
   _setterName: string,
   stateVar: string
 ): RenderPhaseGuardResult | null {
-  // Find the nearest IfStatement ancestor
-  for (let i = ancestorStack.length - 1; i >= 0; i--) {
+  // Find the nearest IfStatement ancestor (start from index 1 to skip the CallExpression itself)
+  // We iterate from nearest to outermost to handle nested if statements correctly:
+  // if (someUnrelatedCondition) {
+  //   if (prop !== state) { setState(prop); } // We want to find this inner if first
+  // }
+  for (let i = 1; i < ancestorStack.length; i++) {
     const ancestor = ancestorStack[i];
 
     if (ancestor.type === 'IfStatement') {
@@ -221,11 +240,12 @@ export function analyzeRenderPhaseGuard(
       const result = analyzeRenderGuardCondition(condition, stateVar, setterCall);
 
       if (result) {
+        // Found a recognizable guard pattern (which is safe by definition)
         return result;
       }
 
-      // There's an if-statement but it's not a recognizable safe pattern
-      // Return as an unsafe guarded call
+      // The nearest IfStatement is not a recognizable safe pattern.
+      // We'll treat this as an unsafe guarded call and stop searching.
       return {
         isSafe: false,
         guardType: 'unknown',
@@ -329,20 +349,11 @@ function analyzeRenderGuardCondition(
       // `if (!state) setState(someTruthyValue)`
       // The guard is safe if the new value is "truthy", which will make `!state` false on the next render.
       // We can't know the truthiness of all expressions, but we can check for common falsy literals.
-      if (setterArg) {
-        const isFalsyLiteral =
-          (setterArg.type === 'BooleanLiteral' && setterArg.value === false) ||
-          (setterArg.type === 'NumericLiteral' && setterArg.value === 0) ||
-          (setterArg.type === 'StringLiteral' && setterArg.value === '') ||
-          setterArg.type === 'NullLiteral' ||
-          (setterArg.type === 'Identifier' && setterArg.name === 'undefined');
-
-        if (!isFalsyLiteral) {
-          return {
-            isSafe: true,
-            guardType: 'toggle-guard',
-          };
-        }
+      if (setterArg && !isFalsyLiteralNode(setterArg)) {
+        return {
+          isSafe: true,
+          guardType: 'toggle-guard',
+        };
       }
     }
   }
@@ -350,14 +361,7 @@ function analyzeRenderGuardCondition(
   // Pattern 3: Direct state check - `if (stateVar)` with falsy setter
   if (condition.type === 'Identifier' && condition.name === stateVar) {
     const setterArg = setterCall.arguments?.[0];
-    // Check for all falsy values (consistent with Pattern 2's isFalsyLiteral check)
-    if (
-      (setterArg?.type === 'BooleanLiteral' && setterArg.value === false) ||
-      (setterArg?.type === 'NumericLiteral' && setterArg.value === 0) ||
-      (setterArg?.type === 'StringLiteral' && setterArg.value === '') ||
-      setterArg?.type === 'NullLiteral' ||
-      (setterArg?.type === 'Identifier' && setterArg.name === 'undefined')
-    ) {
+    if (isFalsyLiteralNode(setterArg)) {
       return {
         isSafe: true,
         guardType: 'toggle-guard',
