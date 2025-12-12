@@ -6,7 +6,7 @@
   "publisher": "samsmithyeah",
   "repository": {
     "type": "git",
-    "url": "https://github.com/samsmithyeah/react-circular-deps-detector.git",
+    "url": "https://github.com/samsmithyeah/react-loop-detector.git",
     "directory": "vscode-extension"
   },
   "license": "MIT",

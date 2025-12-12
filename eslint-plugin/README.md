@@ -252,9 +252,9 @@ Enables all rules with sensible defaults:
 
 Same as recommended but with `no-unstable-deps` as error.
 
-## Relationship to react-circular-deps-detector
+## Relationship to react-loop-detector
 
-This ESLint plugin provides single-file static analysis that can be run during development. For cross-file circular dependency detection and runtime analysis, use the main `react-circular-deps-detector` package.
+This ESLint plugin provides single-file static analysis that can be run during development. For cross-file circular dependency detection and runtime analysis, use the main `react-loop-detector` package.
 
 ## License
 

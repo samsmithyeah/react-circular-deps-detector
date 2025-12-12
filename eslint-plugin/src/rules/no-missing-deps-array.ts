@@ -28,7 +28,7 @@ import { isSetterName, STATE_HOOKS, findSetterCallsInBody, isNodeRldIgnored } fr
 
 const createRule = ESLintUtils.RuleCreator(
   (name) =>
-    `https://github.com/samsmithyeah/react-circular-deps-detector/blob/main/eslint-plugin/docs/rules/${name}.md`
+    `https://github.com/samsmithyeah/react-loop-detector/blob/main/eslint-plugin/docs/rules/${name}.md`
 );
 
 type MessageIds = 'missingDepsArray' | 'missingDepsArrayWithSetState';
