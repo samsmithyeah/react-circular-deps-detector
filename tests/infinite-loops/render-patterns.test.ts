@@ -255,6 +255,42 @@ describe('Render-time infinite loop patterns', () => {
       );
       expect(issues.length).toBeGreaterThan(0);
     });
+
+    it('should flag toggle guard setting falsy value (infinite loop)', async () => {
+      const testFile = path.join(tempDir, 'FalsyToggle.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        function BuggyComponent() {
+          const [count, setCount] = useState(0);
+
+          // BUG: This causes an infinite loop!
+          // !count is true when count is 0
+          // Setting count to 0 keeps !count true forever
+          if (!count) {
+            setCount(0);
+          }
+
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      // Should be flagged because setting to 0 (falsy) keeps the condition true
+      const issues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(issues.length).toBeGreaterThan(0);
+    });
   });
 
   describe('2. useEffect without dependency array', () => {

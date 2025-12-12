@@ -332,20 +332,23 @@ function analyzeRenderGuardCondition(
     if (condition.argument?.type === 'Identifier' && condition.argument.name === stateVar) {
       const setterArg = setterCall.arguments?.[0];
 
-      // `if (!state) setState(true)` or `if (!state) setState(someValue)`
-      if (setterArg?.type === 'BooleanLiteral' && setterArg.value === true) {
-        return {
-          isSafe: true,
-          guardType: 'derived-state',
-        };
-      }
+      // `if (!state) setState(someTruthyValue)`
+      // The guard is safe if the new value is "truthy", which will make `!state` false on the next render.
+      // We can't know the truthiness of all expressions, but we can check for common falsy literals.
+      if (setterArg) {
+        const isFalsyLiteral =
+          (setterArg.type === 'BooleanLiteral' && setterArg.value === false) ||
+          (setterArg.type === 'NumericLiteral' && setterArg.value === 0) ||
+          (setterArg.type === 'StringLiteral' && setterArg.value === '') ||
+          setterArg.type === 'NullLiteral' ||
+          (setterArg.type === 'Identifier' && setterArg.name === 'undefined');
 
-      // Setting to any truthy value when state is falsy
-      if (setterArg && setterArg.type !== 'BooleanLiteral') {
-        return {
-          isSafe: true,
-          guardType: 'derived-state',
-        };
+        if (!isFalsyLiteral) {
+          return {
+            isSafe: true,
+            guardType: 'derived-state',
+          };
+        }
       }
     }
   }
