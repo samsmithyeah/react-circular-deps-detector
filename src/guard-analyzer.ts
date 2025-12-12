@@ -350,8 +350,11 @@ function analyzeRenderGuardCondition(
   // Pattern 3: Direct state check - `if (stateVar)` with falsy setter
   if (condition.type === 'Identifier' && condition.name === stateVar) {
     const setterArg = setterCall.arguments?.[0];
+    // Check for all falsy values (consistent with Pattern 2's isFalsyLiteral check)
     if (
       (setterArg?.type === 'BooleanLiteral' && setterArg.value === false) ||
+      (setterArg?.type === 'NumericLiteral' && setterArg.value === 0) ||
+      (setterArg?.type === 'StringLiteral' && setterArg.value === '') ||
       setterArg?.type === 'NullLiteral' ||
       (setterArg?.type === 'Identifier' && setterArg.name === 'undefined')
     ) {
