@@ -310,28 +310,47 @@ function analyzeRenderGuardCondition(
       // Pattern: if (prop !== otherState) setThisState(constant)
       // This handles: if (items !== prevItems) setSelection(null)
       // where the condition is a derived state pattern for prevItems, not selection
-      const leftIsIdentifierOrMember =
-        left?.type === 'Identifier' || left?.type === 'MemberExpression';
-      const rightIsIdentifierOrMember =
-        right?.type === 'Identifier' || right?.type === 'MemberExpression';
+      //
+      // To reduce false negatives, we require:
+      // 1. At least one side is a MemberExpression (more likely to be a prop like props.items)
+      //    OR we're setting to a strict "reset" value (null, undefined, false, empty array/object)
+      // 2. The setter sets to a constant reset value
+      //
+      // Note: This heuristic could still miss cases like `if (state1 !== state2) setState3(null)`
+      // where both sides are state variables. A full fix would require passing state info down.
+      const leftIsMember = left?.type === 'MemberExpression';
+      const rightIsMember = right?.type === 'MemberExpression';
+      const leftIsIdentifier = left?.type === 'Identifier';
+      const rightIsIdentifier = right?.type === 'Identifier';
 
-      // If condition compares two identifiers/members (e.g. prop !== state or props.prop !== state)
-      // and the setter sets to a constant value (null, undefined, false, etc.)
-      // this is likely a "reset related state" pattern
-      if (leftIsIdentifierOrMember && rightIsIdentifierOrMember) {
+      // At least one side should be an identifier or member expression
+      if ((leftIsMember || leftIsIdentifier) && (rightIsMember || rightIsIdentifier)) {
         const setterArg = setterCall.arguments?.[0];
 
-        // Check if setter argument is a constant reset value
-        if (
+        // Check if setter argument is a strict reset value (excludes arbitrary numbers/strings)
+        const isStrictResetValue =
           setterArg?.type === 'NullLiteral' ||
           (setterArg?.type === 'Identifier' && setterArg.name === 'undefined') ||
           (setterArg?.type === 'BooleanLiteral' && setterArg.value === false) ||
-          setterArg?.type === 'NumericLiteral' ||
-          setterArg?.type === 'StringLiteral' ||
           (setterArg?.type === 'ArrayExpression' && setterArg.elements.length === 0) ||
-          (setterArg?.type === 'ObjectExpression' && setterArg.properties.length === 0)
-        ) {
-          // This is a related state reset inside a derived state guard
+          (setterArg?.type === 'ObjectExpression' && setterArg.properties.length === 0);
+
+        // Also allow falsy literals (0, '') as reset values
+        const isFalsyResetValue =
+          (setterArg?.type === 'NumericLiteral' && setterArg.value === 0) ||
+          (setterArg?.type === 'StringLiteral' && setterArg.value === '');
+
+        // If at least one side is a MemberExpression (likely a prop), allow any constant reset value
+        // Otherwise, only allow strict reset values to be more conservative
+        if (leftIsMember || rightIsMember) {
+          if (isStrictResetValue || isFalsyResetValue) {
+            return {
+              isSafe: true,
+              guardType: 'derived-state',
+            };
+          }
+        } else if (isStrictResetValue || isFalsyResetValue) {
+          // Both sides are simple identifiers - be conservative, only allow strict reset values
           return {
             isSafe: true,
             guardType: 'derived-state',
