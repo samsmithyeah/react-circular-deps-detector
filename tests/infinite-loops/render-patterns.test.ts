@@ -150,6 +150,111 @@ describe('Render-time infinite loop patterns', () => {
       );
       expect(renderStateIssues).toHaveLength(0);
     });
+
+    it('should NOT flag valid derived state pattern (guarded setState)', async () => {
+      const testFile = path.join(tempDir, 'DerivedState.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        // Valid React pattern: https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+        function List({ items }) {
+          const [prevItems, setPrevItems] = useState(items);
+          const [selection, setSelection] = useState(null);
+
+          // This is the valid "derived state" pattern
+          // It only runs once when items changes, not on every render
+          if (items !== prevItems) {
+            setPrevItems(items);
+            setSelection(null);
+          }
+
+          return <div>{selection}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      // The derived state pattern should NOT be flagged as an issue
+      const renderStateIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(renderStateIssues).toHaveLength(0);
+    });
+
+    it('should NOT flag toggle guard pattern during render', async () => {
+      const testFile = path.join(tempDir, 'ToggleGuard.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        function InitComponent() {
+          const [initialized, setInitialized] = useState(false);
+
+          // Valid: will only run once
+          if (!initialized) {
+            setInitialized(true);
+          }
+
+          return <div>Ready</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const renderStateIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(renderStateIssues).toHaveLength(0);
+    });
+
+    it('should flag unsafe guarded setState (will loop multiple times)', async () => {
+      const testFile = path.join(tempDir, 'UnsafeGuard.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        function CounterComponent() {
+          const [count, setCount] = useState(0);
+
+          // Unsafe: This will re-render 100 times before stopping
+          if (count < 100) {
+            setCount(count + 1);
+          }
+
+          return <div>{count}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      // Should be flagged as potential issue (not confirmed loop since it eventually stops)
+      const issues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(issues.length).toBeGreaterThan(0);
+    });
   });
 
   describe('2. useEffect without dependency array', () => {

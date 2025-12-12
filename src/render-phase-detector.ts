@@ -31,6 +31,7 @@ import * as t from '@babel/types';
 import traverse, { NodePath } from '@babel/traverse';
 import { HookAnalysis } from './types';
 import { isHookIgnored, createAnalysis } from './utils';
+import { analyzeRenderPhaseGuard } from './guard-analyzer';
 
 /** React HOCs that wrap component functions */
 const REACT_COMPONENT_WRAPPERS = new Set(['memo', 'forwardRef']);
@@ -145,6 +146,19 @@ export function detectSetStateDuringRender(
 }
 
 /**
+ * Get ancestor stack as array of nodes for guard analysis.
+ */
+function getAncestorStack(path: NodePath): t.Node[] {
+  const ancestors: t.Node[] = [];
+  let current: NodePath | null = path;
+  while (current) {
+    ancestors.push(current.node);
+    current = current.parentPath;
+  }
+  return ancestors;
+}
+
+/**
  * Check a component's function body for setState calls that happen during render.
  */
 function checkComponentBodyForSetState(
@@ -180,6 +194,56 @@ function checkComponentBodyForSetState(
 
       const stateVar = setterToState.get(calleeName) || calleeName;
 
+      // Check if this setState is guarded by a condition (derived state pattern)
+      // Example: if (row !== prevRow) setPrevRow(row)
+      const ancestorStack = getAncestorStack(callPath);
+      const guardAnalysis = analyzeRenderPhaseGuard(
+        callPath.node,
+        ancestorStack,
+        calleeName,
+        stateVar
+      );
+
+      if (guardAnalysis?.isSafe) {
+        // This is a valid "derived state" pattern - safe
+        // React documentation explicitly supports this pattern:
+        // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+        return;
+      }
+
+      if (guardAnalysis && !guardAnalysis.isSafe) {
+        // Guarded but not a safe pattern (e.g., if (count < 100) setCount(count + 1))
+        // This will eventually stop, but is still problematic
+        results.push(
+          createAnalysis({
+            type: 'potential-issue',
+            errorCode: 'RLD-100',
+            category: 'warning',
+            severity: 'medium',
+            confidence: 'high',
+            hookType: 'render',
+            line,
+            column: callPath.node.loc?.start.column,
+            file: filePath,
+            problematicDependency: stateVar,
+            stateVariable: stateVar,
+            setterFunction: calleeName,
+            actualStateModifications: [calleeName],
+            stateReads: [],
+            explanation:
+              `'${calleeName}()' is called during render with a guard condition. ` +
+              `While the guard may eventually stop the updates, this pattern can cause multiple ` +
+              `re-renders before stabilizing and may indicate a design issue.`,
+            suggestion:
+              `If this is intentional "derived state" (like tracking previous props), ensure the condition ` +
+              `compares current vs previous values: \`if (prop !== prevProp) setPrevProp(prop)\`. ` +
+              `Otherwise, move the setState into a useEffect hook.`,
+          })
+        );
+        return;
+      }
+
+      // Unconditional setState during render - critical issue
       results.push(
         createAnalysis({
           type: 'confirmed-infinite-loop',
