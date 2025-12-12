@@ -291,6 +291,41 @@ describe('Render-time infinite loop patterns', () => {
       );
       expect(issues.length).toBeGreaterThan(0);
     });
+
+    it('should flag mismatched derived state pattern (if A !== state, setState(B))', async () => {
+      const testFile = path.join(tempDir, 'MismatchedDerivedState.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        function BuggyComponent({ propA, propB }) {
+          const [prevProp, setPrevProp] = useState(null);
+
+          // BUG: Comparing propA but setting propB - infinite loop!
+          // The condition will keep being true because prevProp never equals propA
+          if (propA !== prevProp) {
+            setPrevProp(propB);
+          }
+
+          return <div>{prevProp}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      // Should be flagged because propA !== prevProp will keep being true
+      const issues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(issues.length).toBeGreaterThan(0);
+    });
   });
 
   describe('2. useEffect without dependency array', () => {

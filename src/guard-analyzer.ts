@@ -179,7 +179,7 @@ export interface RenderPhaseGuardResult {
   /** Whether the guard makes this setState safe */
   isSafe: boolean;
   /** The type of guard detected */
-  guardType: 'derived-state' | 'comparison-guard' | 'unknown';
+  guardType: 'derived-state' | 'toggle-guard' | 'unknown';
   /** Optional warning message */
   warning?: string;
 }
@@ -282,16 +282,8 @@ function analyzeRenderGuardCondition(
             guardType: 'derived-state',
           };
         }
-
-        // Condition involves state but setter doesn't match - might still be safe
-        // if the intent is to sync state with external value
-        if (setterArg?.type === 'Identifier' && otherSide?.type === 'Identifier') {
-          // Conservative: if comparing to an external identifier and setting it, it's likely safe
-          return {
-            isSafe: true,
-            guardType: 'comparison-guard',
-          };
-        }
+        // Note: We intentionally don't mark other patterns as safe here.
+        // if (A !== state) setState(B) where A !== B could cause infinite loops.
       }
 
       // Check for derived state pattern with a DIFFERENT state variable
@@ -346,7 +338,7 @@ function analyzeRenderGuardCondition(
         if (!isFalsyLiteral) {
           return {
             isSafe: true,
-            guardType: 'derived-state',
+            guardType: 'toggle-guard',
           };
         }
       }
@@ -363,7 +355,7 @@ function analyzeRenderGuardCondition(
     ) {
       return {
         isSafe: true,
-        guardType: 'derived-state',
+        guardType: 'toggle-guard',
       };
     }
   }
@@ -407,6 +399,9 @@ function nodesAreEquivalent(a: t.Node | null | undefined, b: t.Node | null | und
   }
   if (a.type === 'BooleanLiteral' && b.type === 'BooleanLiteral') {
     return a.value === b.value;
+  }
+  if (a.type === 'NullLiteral' && b.type === 'NullLiteral') {
+    return true;
   }
 
   return false;
