@@ -209,7 +209,7 @@ export interface RenderPhaseGuardResult {
 export function analyzeRenderPhaseGuard(
   setterCall: t.CallExpression,
   ancestorStack: t.Node[],
-  setterName: string,
+  _setterName: string,
   stateVar: string
 ): RenderPhaseGuardResult | null {
   // Find the nearest IfStatement ancestor
@@ -290,13 +290,15 @@ function analyzeRenderGuardCondition(
       // Pattern: if (prop !== otherState) setThisState(constant)
       // This handles: if (items !== prevItems) setSelection(null)
       // where the condition is a derived state pattern for prevItems, not selection
-      const leftIsIdentifier = left?.type === 'Identifier';
-      const rightIsIdentifier = right?.type === 'Identifier';
+      const leftIsIdentifierOrMember =
+        left?.type === 'Identifier' || left?.type === 'MemberExpression';
+      const rightIsIdentifierOrMember =
+        right?.type === 'Identifier' || right?.type === 'MemberExpression';
 
-      // If condition compares two identifiers (prop !== state or state !== prop)
+      // If condition compares two identifiers/members (e.g. prop !== state or props.prop !== state)
       // and the setter sets to a constant value (null, undefined, false, etc.)
       // this is likely a "reset related state" pattern
-      if (leftIsIdentifier && rightIsIdentifier) {
+      if (leftIsIdentifierOrMember && rightIsIdentifierOrMember) {
         const setterArg = setterCall.arguments?.[0];
 
         // Check if setter argument is a constant reset value
@@ -385,9 +387,34 @@ function nodesAreEquivalent(a: t.Node | null | undefined, b: t.Node | null | und
     return a.name === b.name;
   }
 
-  // Member expression comparison (e.g., props.row === props.row)
+  // Member expression comparison (e.g., props.row === props.row or props['row'] === props.row)
   if (a.type === 'MemberExpression' && b.type === 'MemberExpression') {
-    return nodesAreEquivalent(a.object, b.object) && nodesAreEquivalent(a.property, b.property);
+    if (!nodesAreEquivalent(a.object, b.object)) {
+      return false;
+    }
+
+    const propA = a.property;
+    const propB = b.property;
+
+    // Case 1: a.prop vs b.prop (both non-computed)
+    if (t.isIdentifier(propA) && !a.computed && t.isIdentifier(propB) && !b.computed) {
+      return propA.name === propB.name;
+    }
+    // Case 2: a['prop'] vs b['prop'] (both computed with string literals)
+    if (t.isStringLiteral(propA) && a.computed && t.isStringLiteral(propB) && b.computed) {
+      return propA.value === propB.value;
+    }
+    // Case 3: a.prop vs b['prop'] (mixed)
+    if (t.isIdentifier(propA) && !a.computed && t.isStringLiteral(propB) && b.computed) {
+      return propA.name === propB.value;
+    }
+    // Case 4: a['prop'] vs b.prop (mixed)
+    if (t.isStringLiteral(propA) && a.computed && t.isIdentifier(propB) && !b.computed) {
+      return propA.value === propB.name;
+    }
+
+    // Fallback for other cases, e.g., a[prop] vs b[prop] where prop is a variable
+    return nodesAreEquivalent(propA, propB);
   }
 
   // Literal comparison

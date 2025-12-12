@@ -222,6 +222,42 @@ describe('Render-time infinite loop patterns', () => {
       expect(renderStateIssues).toHaveLength(0);
     });
 
+    it('should NOT flag derived state with member expression (props.items)', async () => {
+      const testFile = path.join(tempDir, 'MemberExpressionDerivedState.tsx');
+      fs.writeFileSync(
+        testFile,
+        `
+        import { useState } from 'react';
+
+        // Valid pattern using props.items instead of destructured items
+        function List(props) {
+          const [prevItems, setPrevItems] = useState(props.items);
+          const [selection, setSelection] = useState(null);
+
+          // Valid: props.items is a MemberExpression
+          if (props.items !== prevItems) {
+            setPrevItems(props.items);
+            setSelection(null);
+          }
+
+          return <div>{selection}</div>;
+        }
+      `
+      );
+
+      const result = await detectCircularDependencies(tempDir, {
+        pattern: '*.tsx',
+        ignore: [],
+      });
+
+      const renderStateIssues = result.intelligentHooksAnalysis.filter(
+        (issue) =>
+          (issue.type === 'confirmed-infinite-loop' || issue.type === 'potential-issue') &&
+          issue.errorCode === 'RLD-100'
+      );
+      expect(renderStateIssues).toHaveLength(0);
+    });
+
     it('should flag unsafe guarded setState (will loop multiple times)', async () => {
       const testFile = path.join(tempDir, 'UnsafeGuard.tsx');
       fs.writeFileSync(
