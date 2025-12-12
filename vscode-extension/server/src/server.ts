@@ -779,7 +779,7 @@ function getErrorCodeDocumentation(code: string): string | null {
     markdown += `\n\n### Example\n\n\`\`\`typescript\n${doc.example}\n\`\`\``;
   }
 
-  markdown += `\n\n[Documentation](https://github.com/samsmithyeah/react-circular-deps-detector#${code.toLowerCase()})`;
+  markdown += `\n\n[Documentation](https://github.com/samsmithyeah/react-loop-detector#${code.toLowerCase()})`;
 
   return markdown;
 }
