@@ -173,6 +173,293 @@ export function analyzeCondition(
 }
 
 /**
+ * Check if a node is a falsy literal value (false, 0, '', null, undefined).
+ * Used to detect toggle guard patterns where setting a falsy value terminates the loop.
+ */
+function isFalsyLiteralNode(node: t.Node | null | undefined): boolean {
+  if (!node) return false;
+  return (
+    (node.type === 'BooleanLiteral' && node.value === false) ||
+    (node.type === 'NumericLiteral' && node.value === 0) ||
+    (node.type === 'StringLiteral' && node.value === '') ||
+    node.type === 'NullLiteral' ||
+    (node.type === 'Identifier' && node.name === 'undefined')
+  );
+}
+
+/**
+ * Result of render-phase guard analysis.
+ */
+export interface RenderPhaseGuardResult {
+  /** Whether the guard makes this setState safe */
+  isSafe: boolean;
+  /** The type of guard detected */
+  guardType: 'derived-state' | 'toggle-guard' | 'unknown';
+  /** Optional warning message */
+  warning?: string;
+}
+
+/**
+ * Analyze whether a render-phase setState is guarded by a safe condition.
+ *
+ * The "derived state" pattern is the valid use case:
+ * ```tsx
+ * function Component({ row }) {
+ *   const [prevRow, setPrevRow] = useState(null);
+ *   if (row !== prevRow) {
+ *     setPrevRow(row);  // Safe - only runs once per prop change
+ *   }
+ *   return <div>...</div>;
+ * }
+ * ```
+ *
+ * This is explicitly documented by React as a valid pattern:
+ * https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+ *
+ * The key to a safe guard is:
+ * 1. The condition compares a prop/external value to the state being set
+ * 2. The setter updates the state to match the comparison value
+ * 3. After the update, the condition becomes false
+ */
+export function analyzeRenderPhaseGuard(
+  setterCall: t.CallExpression,
+  ancestorStack: t.Node[],
+  _setterName: string,
+  stateVar: string
+): RenderPhaseGuardResult | null {
+  // Search all ancestor IfStatements for a safe guard pattern.
+  // We iterate from nearest to outermost to find any safe guard.
+  // Example where we need to check multiple levels:
+  // if (prop !== state) { // Safe outer guard - we want to find this
+  //   if (someOtherCondition) { // Unrecognized inner guard
+  //     setState(prop);
+  //   }
+  // }
+  let isGuarded = false;
+
+  for (let i = 1; i < ancestorStack.length; i++) {
+    const ancestor = ancestorStack[i];
+
+    if (ancestor.type === 'IfStatement') {
+      isGuarded = true;
+      const condition = ancestor.test;
+      const result = analyzeRenderGuardCondition(condition, stateVar, setterCall);
+
+      if (result) {
+        // Found a recognizable safe guard pattern
+        return result;
+      }
+      // Unrecognized guard found, but continue searching upward
+      // in case a safe guard exists in an outer scope
+    }
+  }
+
+  if (isGuarded) {
+    // The call is inside one or more IfStatements, but no recognized safe pattern was found
+    return {
+      isSafe: false,
+      guardType: 'unknown',
+    };
+  }
+
+  // No guard found - unconditional render-phase setState
+  return null;
+}
+
+/**
+ * Analyze if a condition creates a safe guard for render-phase setState.
+ *
+ * Safe patterns:
+ * 1. Derived state: `if (prop !== prevProp) setPrevProp(prop)`
+ *    - Condition compares external value to state
+ *    - Setter updates state to match external value
+ * 2. Toggle: `if (!isInitialized) setIsInitialized(true)`
+ *    - Condition checks state is falsy
+ *    - Setter sets to truthy, so condition becomes false
+ * 3. Related state reset: `if (prop !== prevProp) { setPrevProp(prop); setRelated(null); }`
+ *    - Condition is a derived state pattern for one variable
+ *    - Other setters reset related state to a constant value
+ */
+function analyzeRenderGuardCondition(
+  condition: t.Node | null | undefined,
+  stateVar: string,
+  setterCall: t.CallExpression
+): RenderPhaseGuardResult | null {
+  if (!condition) return null;
+
+  // Pattern 1: Inequality comparison - `if (prop !== state)` or `if (state !== prop)`
+  if (condition.type === 'BinaryExpression') {
+    const { left, right, operator } = condition;
+
+    // Check for !== or !=
+    if (operator === '!==' || operator === '!=') {
+      const hasStateOnLeft = left?.type === 'Identifier' && left.name === stateVar;
+      const hasStateOnRight = right?.type === 'Identifier' && right.name === stateVar;
+
+      if (hasStateOnLeft || hasStateOnRight) {
+        // Get the "other" side of the comparison (the prop/external value)
+        const otherSide = hasStateOnLeft ? right : left;
+
+        // Check if the setter argument matches the "other" side
+        // This confirms the pattern: if (prop !== state) setState(prop)
+        const setterArg = setterCall.arguments?.[0];
+
+        if (setterArg && nodesAreEquivalent(setterArg, otherSide)) {
+          // This is the classic derived state pattern
+          return {
+            isSafe: true,
+            guardType: 'derived-state',
+          };
+        }
+        // Note: We intentionally don't mark other patterns as safe here.
+        // if (A !== state) setState(B) where A !== B could cause infinite loops.
+      }
+
+      // Check for derived state pattern with a DIFFERENT state variable
+      // Pattern: if (prop !== otherState) setThisState(constant)
+      // This handles: if (items !== prevItems) setSelection(null)
+      // where the condition is a derived state pattern for prevItems, not selection
+      //
+      // To reduce false negatives, we require:
+      // 1. At least one side is a MemberExpression (more likely to be a prop like props.items)
+      //    OR we're setting to a strict "reset" value (null, undefined, false, empty array/object)
+      // 2. The setter sets to a constant reset value
+      //
+      // Note: This heuristic could still miss cases like `if (state1 !== state2) setState3(null)`
+      // where both sides are state variables. A full fix would require passing state info down.
+      const leftIsIdentifierOrMember =
+        left?.type === 'Identifier' || left?.type === 'MemberExpression';
+      const rightIsIdentifierOrMember =
+        right?.type === 'Identifier' || right?.type === 'MemberExpression';
+
+      // At least one side should be an identifier or member expression
+      if (leftIsIdentifierOrMember && rightIsIdentifierOrMember) {
+        const setterArg = setterCall.arguments?.[0];
+
+        // Check if setter argument is a strict reset value (excludes arbitrary numbers/strings)
+        const isStrictResetValue =
+          setterArg?.type === 'NullLiteral' ||
+          (setterArg?.type === 'Identifier' && setterArg.name === 'undefined') ||
+          (setterArg?.type === 'BooleanLiteral' && setterArg.value === false) ||
+          (setterArg?.type === 'ArrayExpression' && setterArg.elements.length === 0) ||
+          (setterArg?.type === 'ObjectExpression' && setterArg.properties.length === 0);
+
+        // Also allow falsy literals (0, '') as reset values
+        const isFalsyResetValue =
+          (setterArg?.type === 'NumericLiteral' && setterArg.value === 0) ||
+          (setterArg?.type === 'StringLiteral' && setterArg.value === '');
+
+        if (isStrictResetValue || isFalsyResetValue) {
+          return {
+            isSafe: true,
+            guardType: 'derived-state',
+          };
+        }
+      }
+    }
+  }
+
+  // Pattern 2: Toggle guard - `if (!stateVar)`
+  if (condition.type === 'UnaryExpression' && condition.operator === '!') {
+    if (condition.argument?.type === 'Identifier' && condition.argument.name === stateVar) {
+      const setterArg = setterCall.arguments?.[0];
+
+      // `if (!state) setState(someTruthyValue)`
+      // The guard is safe if the new value is "truthy", which will make `!state` false on the next render.
+      // We can't know the truthiness of all expressions, but we can check for common falsy literals.
+      if (setterArg && !isFalsyLiteralNode(setterArg)) {
+        return {
+          isSafe: true,
+          guardType: 'toggle-guard',
+        };
+      }
+    }
+  }
+
+  // Pattern 3: Direct state check - `if (stateVar)` with falsy setter
+  if (condition.type === 'Identifier' && condition.name === stateVar) {
+    const setterArg = setterCall.arguments?.[0];
+    if (isFalsyLiteralNode(setterArg)) {
+      return {
+        isSafe: true,
+        guardType: 'toggle-guard',
+      };
+    }
+  }
+
+  // Pattern 4: Logical AND with state check - `if (someCondition && prop !== state)`
+  if (condition.type === 'LogicalExpression' && condition.operator === '&&') {
+    const leftResult = analyzeRenderGuardCondition(condition.left, stateVar, setterCall);
+    const rightResult = analyzeRenderGuardCondition(condition.right, stateVar, setterCall);
+
+    if (leftResult?.isSafe) return leftResult;
+    if (rightResult?.isSafe) return rightResult;
+  }
+
+  return null;
+}
+
+/**
+ * Check if two AST nodes are structurally equivalent.
+ * Used to match patterns like: if (prop !== state) setState(prop)
+ */
+function nodesAreEquivalent(a: t.Node | null | undefined, b: t.Node | null | undefined): boolean {
+  if (!a || !b) return false;
+  if (a.type !== b.type) return false;
+
+  // Simple identifier comparison
+  if (a.type === 'Identifier' && b.type === 'Identifier') {
+    return a.name === b.name;
+  }
+
+  // Member expression comparison (e.g., props.row === props.row or props['row'] === props.row)
+  if (a.type === 'MemberExpression' && b.type === 'MemberExpression') {
+    if (!nodesAreEquivalent(a.object, b.object)) {
+      return false;
+    }
+
+    const propA = a.property;
+    const propB = b.property;
+
+    // Case 1: a.prop vs b.prop (both non-computed)
+    if (t.isIdentifier(propA) && !a.computed && t.isIdentifier(propB) && !b.computed) {
+      return propA.name === propB.name;
+    }
+    // Case 2: a['prop'] vs b['prop'] (both computed with string literals)
+    if (t.isStringLiteral(propA) && a.computed && t.isStringLiteral(propB) && b.computed) {
+      return propA.value === propB.value;
+    }
+    // Case 3: a.prop vs b['prop'] (mixed)
+    if (t.isIdentifier(propA) && !a.computed && t.isStringLiteral(propB) && b.computed) {
+      return propA.name === propB.value;
+    }
+    // Case 4: a['prop'] vs b.prop (mixed)
+    if (t.isStringLiteral(propA) && a.computed && t.isIdentifier(propB) && !b.computed) {
+      return propA.value === propB.name;
+    }
+
+    // Fallback for other cases, e.g., a[prop] vs b[prop] where prop is a variable
+    return nodesAreEquivalent(propA, propB);
+  }
+
+  // Literal comparison
+  if (a.type === 'NumericLiteral' && b.type === 'NumericLiteral') {
+    return a.value === b.value;
+  }
+  if (a.type === 'StringLiteral' && b.type === 'StringLiteral') {
+    return a.value === b.value;
+  }
+  if (a.type === 'BooleanLiteral' && b.type === 'BooleanLiteral') {
+    return a.value === b.value;
+  }
+  if (a.type === 'NullLiteral' && b.type === 'NullLiteral') {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Check for early return pattern:
  * ```
  * if (value === something) return;
