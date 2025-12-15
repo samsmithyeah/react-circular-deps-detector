@@ -227,30 +227,39 @@ export function analyzeRenderPhaseGuard(
   _setterName: string,
   stateVar: string
 ): RenderPhaseGuardResult | null {
-  // Find the nearest IfStatement ancestor (start from index 1 to skip the CallExpression itself)
-  // We iterate from nearest to outermost to handle nested if statements correctly:
-  // if (someUnrelatedCondition) {
-  //   if (prop !== state) { setState(prop); } // We want to find this inner if first
+  // Search all ancestor IfStatements for a safe guard pattern.
+  // We iterate from nearest to outermost to find any safe guard.
+  // Example where we need to check multiple levels:
+  // if (prop !== state) { // Safe outer guard - we want to find this
+  //   if (someOtherCondition) { // Unrecognized inner guard
+  //     setState(prop);
+  //   }
   // }
+  let isGuarded = false;
+
   for (let i = 1; i < ancestorStack.length; i++) {
     const ancestor = ancestorStack[i];
 
     if (ancestor.type === 'IfStatement') {
+      isGuarded = true;
       const condition = ancestor.test;
       const result = analyzeRenderGuardCondition(condition, stateVar, setterCall);
 
       if (result) {
-        // Found a recognizable guard pattern (which is safe by definition)
+        // Found a recognizable safe guard pattern
         return result;
       }
-
-      // The nearest IfStatement is not a recognizable safe pattern.
-      // We'll treat this as an unsafe guarded call and stop searching.
-      return {
-        isSafe: false,
-        guardType: 'unknown',
-      };
+      // Unrecognized guard found, but continue searching upward
+      // in case a safe guard exists in an outer scope
     }
+  }
+
+  if (isGuarded) {
+    // The call is inside one or more IfStatements, but no recognized safe pattern was found
+    return {
+      isSafe: false,
+      guardType: 'unknown',
+    };
   }
 
   // No guard found - unconditional render-phase setState
@@ -318,13 +327,13 @@ function analyzeRenderGuardCondition(
       //
       // Note: This heuristic could still miss cases like `if (state1 !== state2) setState3(null)`
       // where both sides are state variables. A full fix would require passing state info down.
-      const leftIsMember = left?.type === 'MemberExpression';
-      const rightIsMember = right?.type === 'MemberExpression';
-      const leftIsIdentifier = left?.type === 'Identifier';
-      const rightIsIdentifier = right?.type === 'Identifier';
+      const leftIsIdentifierOrMember =
+        left?.type === 'Identifier' || left?.type === 'MemberExpression';
+      const rightIsIdentifierOrMember =
+        right?.type === 'Identifier' || right?.type === 'MemberExpression';
 
       // At least one side should be an identifier or member expression
-      if ((leftIsMember || leftIsIdentifier) && (rightIsMember || rightIsIdentifier)) {
+      if (leftIsIdentifierOrMember && rightIsIdentifierOrMember) {
         const setterArg = setterCall.arguments?.[0];
 
         // Check if setter argument is a strict reset value (excludes arbitrary numbers/strings)
@@ -340,17 +349,7 @@ function analyzeRenderGuardCondition(
           (setterArg?.type === 'NumericLiteral' && setterArg.value === 0) ||
           (setterArg?.type === 'StringLiteral' && setterArg.value === '');
 
-        // If at least one side is a MemberExpression (likely a prop), allow any constant reset value
-        // Otherwise, only allow strict reset values to be more conservative
-        if (leftIsMember || rightIsMember) {
-          if (isStrictResetValue || isFalsyResetValue) {
-            return {
-              isSafe: true,
-              guardType: 'derived-state',
-            };
-          }
-        } else if (isStrictResetValue || isFalsyResetValue) {
-          // Both sides are simple identifiers - be conservative, only allow strict reset values
+        if (isStrictResetValue || isFalsyResetValue) {
           return {
             isSafe: true,
             guardType: 'derived-state',
